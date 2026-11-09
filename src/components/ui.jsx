@@ -1,8 +1,12 @@
+// Longer than this and the large size would crowd out the route beside it.
+const LONG_NUMBER = 7
+
+/** A bus number is what people look for, so it's never cut off. A very long one wraps instead. */
 export function NumberPlate({ number, large = false }) {
   return (
     <span
-      className={`inline-block max-w-40 truncate rounded-lg bg-road font-extrabold tracking-tight text-ink ${
-        large ? 'px-2.5 py-0.5 text-2xl' : 'px-2.5 py-0.5 text-base'
+      className={`inline-block max-w-[55%] shrink-0 rounded-lg bg-road px-2.5 py-0.5 leading-tight font-extrabold tracking-tight wrap-anywhere text-ink ${
+        large && number.length <= LONG_NUMBER ? 'text-2xl' : 'text-base'
       }`}
     >
       {number}

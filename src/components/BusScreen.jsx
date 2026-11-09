@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { canReadTowers, readCells } from '../lib/cells.js'
+import { track } from '../lib/usage.js'
 import { useData, usePhonePosition, useTick, useWakeLock } from '../lib/hooks.js'
 import { assignBuses, defaultDeparture, departureWithBus, describeJourney } from '../lib/journey.js'
 import { formatAge, formatClock, formatDuration, formatKm, secondsNow } from '../lib/time.js'
@@ -43,6 +44,11 @@ export default function BusScreen({ feedId, feed, serviceId }) {
   const [matchedTripId, setMatchedTripId] = useState(null)
 
   const { data: service, error: serviceError, retry: retryService, refreshing: serviceRefreshing } = useData(`${feedId}|${serviceId}`, (signal) => api.service(feedId, serviceId, signal))
+
+  const openedNumber = service?.number
+  useEffect(() => {
+    if (openedNumber) track('open_bus', { feed: feedId, bus: openedNumber })
+  }, [feedId, openedNumber])
 
   const nowSec = secondsNow(service?.timezone ?? 'Asia/Kolkata')
 
@@ -124,7 +130,10 @@ export default function BusScreen({ feedId, feed, serviceId }) {
             // Asked again each time, because the better choice depends on the phone's signal now.
             setTrackBy(null)
           }}
-          onChangeTrackBy={setTrackBy}
+          onChangeTrackBy={(choice) => {
+            setTrackBy(choice)
+            track('tracking', { feed: feedId, text: choice })
+          }}
         />
       </div>
 
@@ -138,7 +147,7 @@ export default function BusScreen({ feedId, feed, serviceId }) {
         <Message title="No departures listed today">This feed doesn't show this bus running today.</Message>
       ) : (
         // The bottom padding keeps the last stop and its alert bell clear of the refresh button.
-        <main className="pb-24">
+        <main className="pb-44">
           {firing && (
             <div role="alert" className="flex items-center gap-3 bg-late px-4 py-3 font-semibold text-white">
               <p className="flex-1">{service.stops[alarm].name} is coming up. Get ready!</p>
@@ -236,7 +245,7 @@ function RefreshButton({ onClick, refreshing }) {
       disabled={refreshing}
       aria-label="Refresh this bus"
       title="Refresh"
-      className="fixed right-[max(1.25rem,calc((100vw-36rem)/2+1.25rem))] bottom-5 z-20 flex size-14 items-center justify-center rounded-full bg-ink text-paper shadow-lg"
+      className="fixed right-[max(1.25rem,calc((100vw-36rem)/2+1.25rem))] bottom-[calc(2.5rem+env(safe-area-inset-bottom))] z-20 flex size-14 items-center justify-center rounded-full bg-ink text-paper shadow-lg"
     >
       <ReloadIcon className={`size-6 ${refreshing ? 'animate-spin' : ''}`} />
     </button>

@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
 import { useData, useDebounced, useSessionState, useStoredState } from '../lib/hooks.js'
 import { formatClock, formatDuration, formatKm } from '../lib/time.js'
+import { track } from '../lib/usage.js'
 import FeedNotice from './FeedNotice.jsx'
 import { BusIcon, ErrorMessage, Message, NumberPlate, PinIcon, SearchIcon, SwapIcon } from './ui.jsx'
 
@@ -105,6 +106,13 @@ function BusSearch({ feed, recent, onOpen }) {
   const q = useDebounced(query.trim(), 250)
   const { data, error, loading, retry } = useData(q ? `${feed.id}|${q}` : null, (signal) => api.buses(feed.id, q, signal))
 
+  // Only once they've stopped typing, so "1", "11" and "115" count as one search.
+  const settled = useDebounced(q, 1500)
+  const settledResults = settled === q && data ? data.length : null
+  useEffect(() => {
+    if (settled && settledResults != null) track('search', { feed: feed.id, text: settled, results: settledResults })
+  }, [settled, settledResults, feed.id])
+
   return (
     <>
       <label className="flex items-center gap-2.5 rounded-2xl border border-line bg-card px-4 shadow-sm focus-within:border-road">
@@ -203,7 +211,10 @@ function BetweenSearch({ feed, onOpen }) {
     <form
       onSubmit={(e) => {
         e.preventDefault()
-        if (from.trim() && to.trim()) setSearch({ from: from.trim(), to: to.trim() })
+        if (from.trim() && to.trim()) {
+          setSearch({ from: from.trim(), to: to.trim() })
+          track('between', { feed: feed.id, text: from.trim(), text2: to.trim() })
+        }
       }}
     >
       <div className="relative rounded-2xl border border-line bg-card shadow-sm">

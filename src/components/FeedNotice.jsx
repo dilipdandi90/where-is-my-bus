@@ -1,4 +1,25 @@
-/** Tells users where a feed's data comes from and what's wrong with it, wherever that data is shown. */
+import { useState } from 'react'
+import { setUsageChoice, usageChoice } from '../lib/usage.js'
+
+/** Lets people change their mind about usage data, wherever the footer shows. */
+function UsageSetting() {
+  const [choice, setChoice] = useState(usageChoice)
+  if (choice !== 'all' && choice !== 'usage') return null
+  return (
+    <button
+      type="button"
+      className="mt-1 underline"
+      onClick={() => {
+        setUsageChoice('none')
+        setChoice('none')
+      }}
+    >
+      Stop sharing usage data and delete it
+    </button>
+  )
+}
+
+/** Tells users what to watch for in a feed's data, wherever that data is shown, and who made the app. */
 export default function FeedNotice({ feed }) {
   const warnings = []
   if (feed.expired) {
@@ -16,18 +37,9 @@ export default function FeedNotice({ feed }) {
           {w}
         </p>
       ))}
-      <p>
-        <span className="font-semibold">{feed.official ? 'Government data' : 'Unofficial data, not from the operator'}</span>
-        {': '}
-        <a href={feed.sourceUrl} target="_blank" rel="noreferrer" className="underline">
-          {feed.source}
-        </a>
-      </p>
-      {feed.hasLiveBuses && (
-        <p className="mt-1">
-          <span className="font-semibold">Live bus positions</span> come from an unofficial community feed that doesn't cover every bus.
-        </p>
-      )}
+      {feed.hasLiveBuses && <p className="mb-1">Live positions don't cover every bus.</p>}
+      <p className="font-semibold">Developed by Dilip Dandi</p>
+      <UsageSetting />
     </div>
   )
 }

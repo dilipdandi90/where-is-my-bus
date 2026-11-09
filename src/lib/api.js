@@ -5,6 +5,7 @@ const BASE = import.meta.env.VITE_API_BASE ?? ''
 export class ApiError extends Error {}
 
 function messageFor(status) {
+  if (status === 401) return "That key isn't right."
   if (status === 404) return "We couldn't find this. The timetable may have changed, so try searching again."
   if (status === 503) return 'Bus data is still loading. Please try again in a moment.'
   if (status >= 500) return 'Something went wrong on our side. Please try again.'
@@ -45,5 +46,9 @@ export const api = {
   live: (feed, id, signal) => get(`/${feed}/trip/live?id=${enc(id)}`, signal),
   report: (feed, id, body) => post(`/feeds/${feed}/trip/reports?id=${enc(id)}`, body),
   locateCells: async (cells) => (await post('/cells/locate', { cells })).json(),
+  usageStatus: async () => (await request('/usage/status')).json(),
+  usageEvent: (body) => post('/usage/events', body),
+  usageForget: (deviceId) => post('/usage/forget', { deviceId }),
+  usageSummary: async (key) => (await request('/usage/summary', { headers: { 'X-Admin-Key': key } })).json(),
   learnCells: (cells, fix) => post('/cells/learn', { cells, lat: fix.lat, lon: fix.lon, accuracy: fix.accuracy }),
 }

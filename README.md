@@ -177,11 +177,3 @@ Tower lookups are under `/api/cells`: `POST /locate` turns visible towers into a
 
 Shared positions are reduced to distance along the route, held in memory for 3 minutes, and tied only
 to a random ID that lasts one visit.
-
-## Before going public
-
-- Rider reports and tower samples have no accounts or per-device limits, so anyone could send false
-  data. A median across riders and the 35 km check limit the effect, but a real launch needs rate
-  limiting by IP.
-- Google Play reviews apps that use location, so the use of location needs declaring there.
-- The backend is open to calls from any site (`WIMB_ALLOWED_ORIGINS`).

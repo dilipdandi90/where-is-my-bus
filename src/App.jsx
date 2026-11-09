@@ -2,11 +2,15 @@ import { useEffect, useState } from 'react'
 import BusScreen from './components/BusScreen.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
 import Home from './components/Home.jsx'
+import Insights from './components/Insights.jsx'
+import UsageConsent from './components/UsageConsent.jsx'
 import { api } from './lib/api.js'
+import { shareArea } from './lib/usage.js'
 
 const FEEDS_POLL_MS = 3000
 
 function parseHash() {
+  if (window.location.hash === '#/insights') return { insights: true }
   const [, feedId, kind, serviceId] = window.location.hash.split('/')
   return kind === 'bus' && serviceId ? { feedId, serviceId } : null
 }
@@ -50,17 +54,24 @@ export default function App() {
     }
   }, [])
 
+  useEffect(() => {
+    shareArea()
+  }, [])
+
   const feed = route && feeds?.find((f) => f.id === route.feedId)
 
   return (
     <div className="mx-auto min-h-dvh max-w-xl bg-paper sm:shadow-xl">
       <ErrorBoundary>
-        {route ? (
+        {route?.insights ? (
+          <Insights />
+        ) : route ? (
           <BusScreen key={route.serviceId} feedId={route.feedId} feed={feed} serviceId={route.serviceId} />
         ) : (
           <Home feeds={feeds} failed={feedsFailed} />
         )}
       </ErrorBoundary>
+      {!route?.insights && <UsageConsent />}
     </div>
   )
 }

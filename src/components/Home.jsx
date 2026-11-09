@@ -123,7 +123,7 @@ function BusSearch({ feed, recent, onOpen }) {
           autoComplete="off"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={feed.id === 'msrtc' ? 'Town name, such as Kolhapur' : 'Bus number or place'}
+          placeholder={feed.id === 'msrtc' ? 'Town name, such as Solapur' : 'Bus number or place'}
           className="min-w-0 flex-1 bg-transparent py-3.5 text-base outline-none placeholder:text-ink-soft/70"
         />
       </label>

@@ -61,17 +61,30 @@ class ConnectionsTest {
     }
 
     private List<Connections.Connection> find(String from, String to, int nowSec) {
-        return Connections.find(feed, from, to, MONDAY, nowSec);
+        return Connections.find(feed, from, to, MONDAY, nowSec, Connections.WALKABLE_KM);
     }
 
     @Test
     void findsABusStoppingBesideTheNamedStop() {
         var found = find("Bank Of Maharashtra Hinjawadi", "Pune Station Moledina Road", NINE_AM);
-        assertEquals(1, found.size());
-        var connection = found.getFirst();
-        assertEquals("evening", connection.trip().id());
-        assertEquals("Pune Station Moledina Stand", connection.service().stops.get(connection.alightStopIndex()).name());
-        assertFalse(connection.tomorrow());
+        var evening = found.get(1);
+        assertEquals("evening", evening.trip().id());
+        assertEquals("Pune Station Moledina Stand", evening.service().stops.get(evening.alightStopIndex()).name());
+        assertFalse(evening.tomorrow());
+    }
+
+    @Test
+    void listsTheWholeDayIncludingBusesAlreadyGone() {
+        var found = find("Hinjawadi", "Moledina", NINE_AM);
+        assertEquals(List.of("morning", "evening"), found.stream().map(c -> c.trip().id()).toList());
+        assertTrue(found.getFirst().boardSec() < NINE_AM, "the 08:00 has gone but is still listed");
+    }
+
+    @Test
+    void aCityWideRadiusFindsBusesToOtherStandsInTheSameCity() {
+        // Katraj is about 9 km from the Moledina stops: too far to walk, but the same city.
+        assertTrue(find("Bank Of Maharashtra Hinjawadi", "Katraj", NINE_AM).isEmpty());
+        assertFalse(Connections.find(feed, "Bank Of Maharashtra Hinjawadi", "Moledina", MONDAY, NINE_AM, 10).isEmpty());
     }
 
     @Test
@@ -86,14 +99,16 @@ class ConnectionsTest {
 
     @Test
     void partOfANameIsEnough() {
-        assertEquals(1, find("Hinjawadi", "Moledina", NINE_AM).size());
+        assertEquals(2, find("Hinjawadi", "Moledina", NINE_AM).size());
     }
 
     @Test
-    void afterTheLastBusItOffersTomorrowsFirst() {
-        var connection = find("Hinjawadi", "Moledina", 20 * 3600).getFirst();
-        assertTrue(connection.tomorrow());
-        assertEquals("morning", connection.trip().id());
+    void afterTheLastBusTomorrowsBusesFollowTodays() {
+        var found = find("Hinjawadi", "Moledina", 20 * 3600);
+        assertEquals(4, found.size());
+        assertFalse(found.get(1).tomorrow());
+        assertTrue(found.get(2).tomorrow());
+        assertEquals("morning", found.get(2).trip().id());
     }
 
     @Test

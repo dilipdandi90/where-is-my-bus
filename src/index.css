@@ -88,13 +88,148 @@ input:not([type='checkbox']):focus-visible {
   animation: pulse-ring 1.8s ease-out infinite;
 }
 
+/* Screens and cards slide up into place as they appear. "both" keeps them hidden until their turn. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem);
+  }
+}
+
+.screen-fade {
+  animation: fade-in 0.25s ease-out;
+}
+
+.card-in {
+  animation: rise-in 0.35s ease-out both;
+}
+
+/* Timeline stops fade in top to bottom, each a moment after the last (delay set inline). */
+@keyframes stop-in {
+  from {
+    opacity: 0;
+    transform: translateX(-0.4rem);
+  }
+}
+
+.stop-in {
+  animation: stop-in 0.3s ease-out both;
+}
+
+/* The travelled part of the line draws downwards. */
+@keyframes rail-grow {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+.rail-grow {
+  transform-origin: top;
+  animation: rail-grow 0.9s ease-out both;
+}
+
+/* The bus and the orange line glide to each new position instead of jumping. New live positions
+   arrive every 15 seconds, so a slow, even glide keeps the bus moving most of the time. */
+.track-move {
+  transition:
+    top 4s linear,
+    height 4s linear;
+}
+
+/* The bus hops into place, then bobs gently as if it's driving. */
+@keyframes bus-arrive {
+  0% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.bus-arrive {
+  animation: bus-arrive 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes bus-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+.bus-bob {
+  animation: bus-bob 1.6s ease-in-out infinite;
+}
+
+/* The green "live" dot breathes. */
+@keyframes live-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(11 127 84 / 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgb(11 127 84 / 0);
+  }
+}
+
+.live-dot {
+  animation: live-dot 1.8s ease-in-out infinite;
+}
+
+/* New status text fades in, so updates are noticed without being jarring. */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.fade-in {
+  animation: fade-in 0.4s ease-out;
+}
+
+/* Buttons press down slightly. Uses scale, which leaves Tailwind's translate untouched. */
+button:not(:disabled),
+a.press {
+  transition: scale 0.12s ease-out;
+}
+
+button:not(:disabled):active,
+a.press:active {
+  scale: 0.97;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pulse-ring {
     animation: none;
     opacity: 0;
   }
 
-  .sheet[open] {
+  .track-move {
+    transition: none;
+  }
+
+  .sheet[open],
+  .screen-fade,
+  .card-in,
+  .stop-in,
+  .rail-grow,
+  .bus-arrive,
+  .bus-bob,
+  .live-dot,
+  .fade-in {
     animation: none;
+  }
+
+  button:not(:disabled):active,
+  a.press:active {
+    scale: none;
   }
 }

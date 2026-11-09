@@ -1,6 +1,11 @@
 import { kmAtOffset, lastStopIndex, nearestDeparture, offsetAtKm } from './tracker.js'
 import { clockForTrip } from './time.js'
 
+// How far a live bus can sit outside its trip's window and still count as running that trip. Beyond
+// this (e.g. a night bus with no matching trip in a daytime-only feed) its real position is shown
+// but arrival times are left blank, since the timetable has none and we never invent them.
+const SCHEDULE_SLACK_SEC = 45 * 60
+
 /**
  * Works out what to show for a trip right now. The rider's own phone comes first, then GPS on the bus,
  * then other riders, then the timetable. Timetable positions are only estimates, so have no delay figure.
@@ -35,7 +40,21 @@ export function describeJourney({ stops, trip, nowSec, phoneKm, bus, live, mode 
   }
 
   const last = lastStopIndex(stops, km)
-  const delaySec = source === 'timetable' ? null : elapsed - offsetAtKm(stops, offsets, km)
+  const arrived = last === stops.length - 1
+  const phase = arrived ? 'finished' : 'running'
+  const isLive = source !== 'timetable'
+
+  // A live bus can run when its trip's schedule is long over (night, with a daytime-only feed). Its
+  // position is real, and so are the timetable's travel times between stops on this route, so stops
+  // ahead get now plus the travel time from where the bus is, and stops behind get now minus it.
+  // The ones behind are approximate (passedApprox), as nothing recorded when the bus passed them.
+  if (isLive && (elapsed < -SCHEDULE_SLACK_SEC || elapsed > duration + SCHEDULE_SLACK_SEC)) {
+    const here = offsetAtKm(stops, offsets, km)
+    const eta = stops.map((_, i) => clock + (offsets[i] - here))
+    return { phase, source, km, last, delaySec: null, eta, offSchedule: true, passedApprox: true, clock }
+  }
+
+  const delaySec = isLive ? elapsed - offsetAtKm(stops, offsets, km) : null
   // The same delay applies either side of the bus, so times always run forward down the route.
   // The clock caps both: stops behind can't be in the future, and stops ahead can't be in the past.
   const eta = stops.map((_, i) => {
@@ -44,9 +63,8 @@ export function describeJourney({ stops, trip, nowSec, phoneKm, bus, live, mode 
     const expected = scheduled + delaySec
     return i > last ? Math.max(clock, expected) : Math.min(clock, expected)
   })
-  const arrived = last === stops.length - 1
 
-  return { phase: arrived ? 'finished' : 'running', source, km, last, delaySec, eta, clock }
+  return { phase, source, km, last, delaySec, eta, clock }
 }
 
 const ROUTE_END_KM = 0.3

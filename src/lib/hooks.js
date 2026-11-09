@@ -1,37 +1,87 @@
-import { useEffect, useEffectEvent, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import { backupAllowed, MAX_USABLE_ACCURACY_M, TOWER_POLL_MS, towerFix } from './cellFix.js'
 import { canReadTowers, locateTowers, readCells } from './cells.js'
 import { updatePosition } from './tracker.js'
 
+// Bump the version when the shape of what the server sends changes, so copies saved by an older
+// version of the app are never shown in place of the new answer.
+const CACHE_PREFIX = 'wimb.c2.'
+const OLD_CACHE_PREFIXES = ['wimb.c.']
+
+try {
+  Object.keys(localStorage)
+    .filter((k) => OLD_CACHE_PREFIXES.some((p) => k.startsWith(p)))
+    .forEach((k) => localStorage.removeItem(k))
+} catch {
+  // Storage may be unavailable, in which case there's nothing old to clear.
+}
+
+function readCache(key, maxAgeMs) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(CACHE_PREFIX + key))
+    return stored && Date.now() - stored.t < maxAgeMs ? stored.d : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function writeCache(key, data) {
+  const entry = JSON.stringify({ t: Date.now(), d: data })
+  try {
+    localStorage.setItem(CACHE_PREFIX + key, entry)
+  } catch {
+    // Storage is full, so start the cache afresh rather than stop caching.
+    try {
+      Object.keys(localStorage)
+        .filter((k) => k.startsWith(CACHE_PREFIX))
+        .forEach((k) => localStorage.removeItem(k))
+      localStorage.setItem(CACHE_PREFIX + key, entry)
+    } catch {
+      // Private browsing can refuse storage entirely, which only means no cache.
+    }
+  }
+}
+
 /**
  * Loads data for a key, returning {data, error, loading, refreshing, retry}. A null key loads nothing.
  * While retrying, the previous data stays available so screens don't blank out.
+ *
+ * @param options.cacheMs if set, a saved copy younger than this shows at once while a fresh one loads,
+ *        and stays on screen if the server can't be reached. Never use it for live positions.
  */
-export function useData(key, fetcher) {
+export function useData(key, fetcher, { cacheMs } = {}) {
   const [state, setState] = useState({})
   const [attempt, setAttempt] = useState(0)
   const load = useEffectEvent((signal) => fetcher(signal))
   const retry = () => setAttempt((a) => a + 1)
   const request = key == null ? null : `${key}#${attempt}`
+  const cached = useMemo(() => (key != null && cacheMs ? readCache(key, cacheMs) : undefined), [key, cacheMs])
 
   useEffect(() => {
     if (request == null) return undefined
     const controller = new AbortController()
     load(controller.signal)
-      .then((data) => setState({ key, request, data }))
+      .then((data) => {
+        if (cacheMs) writeCache(key, data)
+        setState({ key, request, data })
+      })
       .catch((error) => {
         if (error.name !== 'AbortError') {
           setState((s) => ({ key, request, error, data: s.key === key ? s.data : undefined }))
         }
       })
     return () => controller.abort()
-    // key always changes along with request.
+    // key and cacheMs always come with request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request])
 
   if (request == null) return { loading: false, retry }
-  if (state.request === request) return { ...state, retry }
+  if (state.request === request) {
+    // A failed refresh still shows the saved copy, with the error alongside.
+    return state.data === undefined && cached !== undefined ? { ...state, data: cached, retry } : { ...state, retry }
+  }
   if (state.key === key && state.data !== undefined) return { data: state.data, refreshing: true, retry }
+  if (cached !== undefined) return { data: cached, refreshing: true, retry }
   return { loading: true, retry }
 }
 

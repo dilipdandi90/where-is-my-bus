@@ -10,19 +10,22 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Finds direct buses between two places. People name a place, not a pole: "Pune Station Moledina Road"
- * and "Pune Station Moledina Stand" are next to each other, and a bus using either one will do. So a
- * bus counts if it calls within walking distance of each named stop, in that order.
+ * Finds direct buses between two places, as a full day's timetable. People name a place, not a pole:
+ * "Pune Station Moledina Road" and "Pune Station Moledina Stand" are next to each other, and a bus
+ * using either one will do. So a bus counts if it calls near each named stop, in that order. For city
+ * buses "near" is walking distance; for buses between cities it's the whole city, since Sambhaji Nagar
+ * has several stands kilometres apart and a bus to any of them gets you there.
  */
 public final class Connections {
-    static final double WALKABLE_KM = 0.5;
-    private static final int DAY_SEC = 86400;
+    public static final double WALKABLE_KM = 0.5;
     private static final int MAX_NAMED_STOPS = 50;
 
     /**
+     * One bus on one day.
+     *
      * @param boardStopIndex where to get on, within the service's stops
      * @param alightStopIndex where to get off
-     * @param tomorrow true when nothing else runs today, so {@code trip} is tomorrow's first
+     * @param tomorrow true for tomorrow's buses, which are listed when none are left today
      */
     public record Connection(Service service, Trip trip, int boardStopIndex, int alightStopIndex, boolean tomorrow) {
         public int boardSec() {
@@ -41,30 +44,43 @@ public final class Connections {
      * @param to a stop name, or part of one
      * @param isoWeekday today, from 1 for Monday to 7 for Sunday
      * @param nowSec seconds since midnight
-     * @return soonest first, with tomorrow's after all of today's
+     * @param radiusKm how far from each named stop still counts as that place
+     * @return all of today's buses in boarding order, including ones already gone. If none are left
+     *         today, tomorrow's follow.
      */
-    public static List<Connection> find(FeedData feed, String from, String to, int isoWeekday, int nowSec) {
-        Map<Stop, Double> nearFrom = stopsNear(feed, GtfsLoader.normalize(from));
-        Map<Stop, Double> nearTo = stopsNear(feed, GtfsLoader.normalize(to));
+    public static List<Connection> find(FeedData feed, String from, String to, int isoWeekday, int nowSec, double radiusKm) {
+        Map<Stop, Double> nearFrom = stopsNear(feed, GtfsLoader.normalize(from), radiusKm);
+        Map<Stop, Double> nearTo = stopsNear(feed, GtfsLoader.normalize(to), radiusKm);
         if (nearFrom.isEmpty() || nearTo.isEmpty()) {
             return List.of();
         }
-        List<Connection> found = new ArrayList<>();
+        int tomorrow = isoWeekday % 7 + 1;
+        List<Connection> today = new ArrayList<>();
+        List<Connection> next = new ArrayList<>();
         for (Service service : feed.services()) {
             int[] pair = bestPair(service, nearFrom, nearTo);
-            if (pair != null) {
-                Connection connection = nextConnection(service, pair[0], pair[1], isoWeekday, nowSec);
-                if (connection != null) {
-                    found.add(connection);
+            if (pair == null) {
+                continue;
+            }
+            for (Trip trip : service.trips) {
+                if (trip.runsOn(isoWeekday)) {
+                    today.add(new Connection(service, trip, pair[0], pair[1], false));
+                }
+                if (trip.runsOn(tomorrow)) {
+                    next.add(new Connection(service, trip, pair[0], pair[1], true));
                 }
             }
+        }
+        List<Connection> found = new ArrayList<>(today);
+        if (today.stream().noneMatch(c -> c.boardSec() >= nowSec)) {
+            found.addAll(next);
         }
         found.sort(Comparator.comparing(Connection::tomorrow).thenComparingInt(Connection::boardSec));
         return found;
     }
 
-    /** Every stop within walking distance of a named place, with how far away it is. */
-    private static Map<Stop, Double> stopsNear(FeedData feed, String key) {
+    /** Every stop within the radius of a named place, with how far away it is. */
+    private static Map<Stop, Double> stopsNear(FeedData feed, String key, double radiusKm) {
         if (key.isEmpty()) {
             return Map.of();
         }
@@ -76,7 +92,7 @@ public final class Connections {
         for (Stop stop : feed.stops()) {
             for (Stop place : named) {
                 double km = Geo.km(stop.lat(), stop.lon(), place.lat(), place.lon());
-                if (km <= WALKABLE_KM) {
+                if (km <= radiusKm) {
                     near.merge(stop, km, Math::min);
                 }
             }
@@ -104,26 +120,5 @@ public final class Connections {
             }
         }
         return best;
-    }
-
-    private static Connection nextConnection(Service service, int board, int alight, int isoWeekday, int nowSec) {
-        Trip nextToday = null;
-        Trip firstTomorrow = null;
-        int tomorrow = isoWeekday % 7 + 1;
-        for (Trip trip : service.trips) {
-            int boardSec = trip.startSec() + trip.offsets()[board];
-            if (trip.runsOn(isoWeekday) && boardSec >= nowSec && boardSec < DAY_SEC
-                    && (nextToday == null || boardSec < nextToday.startSec() + nextToday.offsets()[board])) {
-                nextToday = trip;
-            }
-            if (trip.runsOn(tomorrow)
-                    && (firstTomorrow == null || boardSec < firstTomorrow.startSec() + firstTomorrow.offsets()[board])) {
-                firstTomorrow = trip;
-            }
-        }
-        if (nextToday != null) {
-            return new Connection(service, nextToday, board, alight, false);
-        }
-        return firstTomorrow == null ? null : new Connection(service, firstTomorrow, board, alight, true);
     }
 }

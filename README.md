@@ -46,7 +46,7 @@ certificate warning, which appears because the certificate is self-signed.
 
 The website and the phone app both need the backend on the internet, so it goes first.
 
-**1. Backend.** Host `backend/` anywhere that runs a Dockerfile, with at least 512 MB of memory. All five
+**1. Backend.** Host `backend/` anywhere that runs a Dockerfile, with at least 512 MB of memory. All
 regions load in about 500 MB. It needs an `https` address, and it reads the port from `PORT`.
 
 **2. Website.** On Netlify, set the environment variable `VITE_API_BASE` to the backend's address, such as
@@ -144,8 +144,6 @@ download fails.
 | Pune, Pimpri-Chinchwad | PMPML | [pmpml-gtfs](https://github.com/croyla/pmpml-gtfs), with [live positions](https://pmpml-rt.blrtransit.com/) | Unofficial. Live feed isn't exhaustive and its address may change |
 | Maharashtra | MSRTC | [msrtc-gtfs](https://github.com/croyla/msrtc-gtfs) | Unofficial, incomplete, no licence stated |
 | Telangana | TGSRTC | [Open Data Telangana](https://data.telangana.gov.in/), via OpenCity | Government data. Times are repaired, see below |
-| Delhi | DTC, DIMTS | [Delhi Open Transit Data](https://otd.delhi.gov.in/), via Mobility Database | Government data. Calendar ended Jan 2024, times are constant-speed estimates |
-
 Maharashtra's operators don't publish open timetable data that we could find, so its feeds are
 community-built. Check each source's terms, and ideally ask the operators, before launching publicly.
 MSRTC in particular has no stated licence.

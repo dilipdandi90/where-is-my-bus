@@ -8,16 +8,36 @@ import { api } from './lib/api.js'
 import { shareArea } from './lib/usage.js'
 
 const FEEDS_POLL_MS = 3000
+const SAVED_FEEDS_KEY = 'wimb.feeds'
+
+function readSavedFeeds() {
+  try {
+    return JSON.parse(localStorage.getItem(SAVED_FEEDS_KEY))
+  } catch {
+    return null
+  }
+}
+
+function saveFeeds(list) {
+  try {
+    localStorage.setItem(SAVED_FEEDS_KEY, JSON.stringify(list))
+  } catch {
+    // Private browsing can refuse storage, which only means waiting next time.
+  }
+}
 
 function parseHash() {
   if (window.location.hash === '#/insights') return { insights: true }
-  const [, feedId, kind, serviceId] = window.location.hash.split('/')
-  return kind === 'bus' && serviceId ? { feedId, serviceId } : null
+  const [, feedId, kind, serviceId, trip] = window.location.hash.split('/')
+  // The trip is there when a particular departure was tapped, as in the between-stops timetable.
+  return kind === 'bus' && serviceId ? { feedId, serviceId, tripId: trip ? decodeURIComponent(trip) : null } : null
 }
 
 export default function App() {
   const [route, setRoute] = useState(parseHash)
-  const [feeds, setFeeds] = useState(null)
+  // The list from the last visit shows at once, so the app doesn't sit on "Connecting…" while a
+  // sleeping server wakes up. Saved searches and buses then show from cache too.
+  const [feeds, setFeeds] = useState(readSavedFeeds)
   const [feedsFailed, setFeedsFailed] = useState(false)
 
   useEffect(() => {
@@ -40,6 +60,8 @@ export default function App() {
         const list = await api.feeds()
         if (stopped) return
         setFeeds(list)
+        // Only a fully loaded list is worth showing next time, not one caught mid-startup.
+        if (list.every((f) => f.status === 'READY')) saveFeeds(list)
         setFeedsFailed(false)
         allReady = list.every((f) => f.status === 'READY')
       } catch {
@@ -63,13 +85,17 @@ export default function App() {
   return (
     <div className="mx-auto min-h-dvh max-w-xl bg-paper sm:shadow-xl">
       <ErrorBoundary>
-        {route?.insights ? (
-          <Insights />
-        ) : route ? (
-          <BusScreen key={route.serviceId} feedId={route.feedId} feed={feed} serviceId={route.serviceId} />
-        ) : (
-          <Home feeds={feeds} failed={feedsFailed} />
-        )}
+        {/* Keyed per screen so each one fades in. Opacity only: a transform here would pin the
+            fixed refresh button to this box instead of the window while it animated. */}
+        <div key={route?.insights ? 'insights' : (route ? `${route.serviceId}/${route.tripId ?? ''}` : 'home')} className="screen-fade">
+          {route?.insights ? (
+            <Insights />
+          ) : route ? (
+            <BusScreen feedId={route.feedId} feed={feed} serviceId={route.serviceId} initialTripId={route.tripId} />
+          ) : (
+            <Home feeds={feeds} failed={feedsFailed} />
+          )}
+        </div>
       </ErrorBoundary>
       {!route?.insights && <UsageConsent />}
     </div>

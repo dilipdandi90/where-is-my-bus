@@ -62,6 +62,33 @@ test('GPS on the bus beats riders and the timetable, but the phone beats it', ()
   assert.equal(describeJourney({ ...base, bus, mode: 'gps', phoneKm: 2, nowSec: 36000 + 2400 }).source, 'gps')
 })
 
+test('a live bus outside its trip window gets times from its position and the published travel times', () => {
+  const bus = { plate: 'X', km: 10, ageSec: 60 }
+  // 11:50, well past this 10:00–11:00 trip, as with a night bus and a daytime-only feed.
+  const j = describeJourney({ ...base, bus, nowSec: 42600 })
+  assert.equal(j.source, 'bus')
+  assert.equal(j.km, 10)
+  assert.equal(j.delaySec, null, 'no late or early figure without a matching trip')
+  assert.equal(j.offSchedule, true)
+  // The timetable takes 30 minutes between each pair of stops.
+  assert.equal(j.eta[2], 42600 + 1800, 'stop ahead: now plus the travel time')
+  assert.equal(j.eta[1], 42600, 'the stop it is at: now')
+  assert.equal(j.eta[0], 42600 - 1800, 'stop behind: worked back from the travel time')
+  assert.equal(j.passedApprox, true)
+})
+
+test('a live bus between stops off the timetable uses the remaining part of the travel time', () => {
+  // Halfway between km 10 and km 20, so 15 of the 30 minutes are left.
+  const j = describeJourney({ ...base, bus: { plate: 'X', km: 15, ageSec: 60 }, nowSec: 42600 })
+  assert.equal(j.eta[2], 42600 + 900)
+})
+
+test('a live bus within its trip window reports a real delay', () => {
+  const j = describeJourney({ ...base, bus: { plate: 'X', km: 10, ageSec: 60 }, nowSec: 36000 + 2400 })
+  assert.equal(j.delaySec, 600)
+  assert.ok(!j.offSchedule)
+})
+
 test('each live bus is matched to the departure the timetable puts nearest it', () => {
   const departures = [
     { tripId: 'nine', startSec: 9 * 3600, durationSec: 3600 },
@@ -129,9 +156,9 @@ test('trip running past midnight is still under way in the early hours', () => {
 })
 
 test('formats times for people', () => {
-  assert.equal(formatClock(0), '12:00 am')
-  assert.equal(formatClock(52200), '2:30 pm')
-  assert.equal(formatClock(90000), '1:00 am')
+  assert.equal(formatClock(0), '00:00')
+  assert.equal(formatClock(52200), '14:30')
+  assert.equal(formatClock(90000), '01:00')
   assert.equal(formatDuration(45), '45 min')
   assert.equal(formatDuration(120), '2 h')
   assert.equal(formatDuration(135), '2 h 15 min')

@@ -14,13 +14,19 @@ const BADGES = {
   done: { text: 'Finished', className: 'text-ink-soft' },
 }
 
-/** Lets people pick a departure from a list showing which are running, next or finished. */
-export default function DeparturePicker({ departures, selectedId, nowSec, onSelect }) {
+/**
+ * Lets people pick a departure from a list showing which are running, next or finished.
+ *
+ * @param liveBus a live bus being followed that fits none of these departures, or null. Then no
+ *        timetable departure is shown as chosen, so a running bus is never labelled "Finished".
+ */
+export default function DeparturePicker({ departures, selectedId, nowSec, onSelect, liveBus = null }) {
   const dialog = useRef(null)
   const selectedRow = useRef(null)
   const [open, setOpen] = useState(false)
 
-  const selected = departures.find((d) => d.tripId === selectedId)
+  const chosenId = liveBus ? null : selectedId
+  const selected = departures.find((d) => d.tripId === chosenId)
   const nextId = departures.find((d) => statusOf(d, nowSec) === 'upcoming')?.tripId
 
   const badgeFor = (d) => {
@@ -52,11 +58,16 @@ export default function DeparturePicker({ departures, selectedId, nowSec, onSele
         className="flex w-full items-center gap-3 rounded-2xl border border-line bg-card px-4 py-3 text-left shadow-sm"
       >
         <span className="min-w-0 flex-1">
-          <span className="block text-xs font-medium text-ink-soft">Departure</span>
+          <span className="block text-xs font-medium text-ink-soft">{liveBus ? 'Live bus' : 'Departure'}</span>
           <span className="block font-semibold">
-            {selected ? `${formatClock(selected.startSec)} to ${formatClock(selected.startSec + selected.durationSec)}` : 'Choose a departure'}
+            {liveBus
+              ? liveBus.plate
+              : selected
+                ? `${formatClock(selected.startSec)} to ${formatClock(selected.startSec + selected.durationSec)}`
+                : 'Choose a departure'}
           </span>
         </span>
+        {liveBus && <span className="shrink-0 rounded-full bg-ontime/10 px-2.5 py-1 text-xs font-semibold text-ontime">Running now</span>}
         {badge && <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${badge.className}`}>{badge.text}</span>}
         <ChevronIcon className="size-5 shrink-0 text-ink-soft" />
       </button>
@@ -72,14 +83,14 @@ export default function DeparturePicker({ departures, selectedId, nowSec, onSele
         }}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-4">
-          <h2 className="font-bold">Today's departures</h2>
+          <h2 className="font-bold">Today's timetable</h2>
           <button onClick={() => dialog.current.close()} className="-mr-2 rounded-lg px-2 py-1 text-sm font-semibold text-ink-soft">
             Close
           </button>
         </header>
         <ul className="min-h-0 flex-1 overflow-y-auto py-1">
           {departures.map((d) => {
-            const isSelected = d.tripId === selectedId
+            const isSelected = d.tripId === chosenId
             const rowBadge = badgeFor(d)
             const done = statusOf(d, nowSec) === 'done'
             return (

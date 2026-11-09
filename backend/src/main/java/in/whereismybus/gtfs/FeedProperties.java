@@ -11,10 +11,13 @@ public record FeedProperties(String dataDir, int refreshAfterHours, List<Feed> f
      * @param note a limitation of this feed that users should see
      * @param numbersAreCodes whether its route numbers are data codes passengers wouldn't recognise
      * @param realtimeUrl where to get GTFS-Realtime positions from GPS devices on the buses, if anywhere
+     * @param stopRadiusKm how far from a named stop still counts as that place when searching between
+     *        stops. Walking distance suits city buses; a whole city suits buses between cities. Null
+     *        means walking distance.
      */
     public record Feed(String id, String name, String region, String operators, String url, String source,
                        String sourceUrl, boolean official, NumberRule numberRule, String note, boolean numbersAreCodes,
-                       String realtimeUrl) {}
+                       String realtimeUrl, Double stopRadiusKm) {}
 
     public enum NumberRule { TRIP_NAME_PREFIX, ROUTE_NAME }
 }

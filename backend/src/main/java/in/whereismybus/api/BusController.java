@@ -9,11 +9,13 @@ import in.whereismybus.gtfs.Geo;
 import in.whereismybus.gtfs.GtfsLoader;
 import in.whereismybus.live.LiveVehicles;
 import in.whereismybus.live.RiderReports;
+import jakarta.servlet.http.HttpServletResponse;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -32,8 +34,12 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/feeds")
 public class BusController {
     private static final int MAX_RESULTS = 40;
+    // A whole day of buses between two big places, such as a busy city corridor, can run to hundreds.
+    private static final int MAX_TIMETABLE_ROWS = 400;
     private static final double MAX_ACCURACY_M = 5000;
     private static final double MIN_ROUTE_TOLERANCE_KM = 1;
+    /** Within this of the last stop, a bus has finished its run (matches the app's own rule). */
+    private static final double ROUTE_END_KM = 0.3;
     private static final Pattern RIDER_ID = Pattern.compile("[A-Za-z0-9-]{8,64}");
 
     private final FeedRegistry registry;
@@ -53,7 +59,7 @@ public class BusController {
 
     public record ServiceSummary(String serviceId, String number, String operator, String label, String from,
                                  String to, int stops, double km, int departuresToday, int typicalMinutes,
-                                 Integer nextDepartureSec) {}
+                                 Integer nextDepartureSec, int busesRunning) {}
 
     public record StopDto(String id, String name, double lat, double lon, double km) {}
 
@@ -67,8 +73,9 @@ public class BusController {
 
     public record StopSuggestion(String name, double lat, double lon) {}
 
-    public record ConnectionDto(ServiceSummary service, int boardSec, int alightSec, int minutes, double km, String boardStop,
-                                String alightStop, boolean tomorrow) {}
+    /** @param departed whether this bus has already left the boarding stop today */
+    public record ConnectionDto(ServiceSummary service, String tripId, int boardSec, int alightSec, int minutes, double km,
+                                String boardStop, String alightStop, boolean tomorrow, boolean departed) {}
 
     public record LiveStatus(int riders, Double km, String source, Integer ageSec) {}
 
@@ -81,9 +88,19 @@ public class BusController {
         return registry.all().stream().map(BusController::toDto).toList();
     }
 
+    /**
+     * Lets browsers reuse an answer for a while instead of asking again. Timetables change at most
+     * daily; anything with live counts in it is kept briefly. Live positions are never cached.
+     */
+    private static void cacheFor(HttpServletResponse response, int seconds) {
+        response.setHeader("Cache-Control", "public, max-age=" + seconds);
+    }
+
     @GetMapping("/{feed}/buses")
-    public List<ServiceSummary> searchBuses(@PathVariable String feed, @RequestParam String q) {
+    public List<ServiceSummary> searchBuses(@PathVariable String feed, @RequestParam String q, HttpServletResponse response) {
         FeedData data = ready(feed);
+        // Short, because each result says how many buses are running right now.
+        cacheFor(response, 30);
         String query = GtfsLoader.normalize(q);
         if (query.isEmpty()) {
             return List.of();
@@ -100,17 +117,19 @@ public class BusController {
         return hits.stream()
                 .sorted(Comparator.comparingInt(Hit::rank).thenComparing(h -> -h.service().trips.size()))
                 .limit(MAX_RESULTS)
-                .map(h -> summary(h.service(), now))
+                .map(h -> summary(feed, h.service(), now))
                 .toList();
     }
 
     @GetMapping("/{feed}/services/{serviceId}")
-    public ServiceDetail service(@PathVariable String feed, @PathVariable String serviceId) {
+    public ServiceDetail service(@PathVariable String feed, @PathVariable String serviceId, HttpServletResponse response) {
         FeedData data = ready(feed);
         Service s = data.serviceById().get(serviceId);
         if (s == null) {
             throw notFound("No such service");
         }
+        // The list holds today's departures, so it's kept for minutes rather than the whole day.
+        cacheFor(response, 600);
         List<StopDto> stops = new ArrayList<>(s.stops.size());
         for (int i = 0; i < s.stops.size(); i++) {
             var st = s.stops.get(i);
@@ -126,13 +145,15 @@ public class BusController {
     // Trip IDs go in the query string: some contain backslashes (MSRTC's L5674\5), and the web
     // server rejects those in a URL path before the request gets here.
     @GetMapping("/{feed}/trip")
-    public TripDetail trip(@PathVariable String feed, @RequestParam("id") String tripId) {
+    public TripDetail trip(@PathVariable String feed, @RequestParam("id") String tripId, HttpServletResponse response) {
         Trip t = trip(ready(feed), tripId);
+        cacheFor(response, 6 * 3600);
         return new TripDetail(t.id(), t.serviceId(), t.startSec(), t.offsets());
     }
 
     @GetMapping("/{feed}/stops")
-    public List<StopSuggestion> searchStops(@PathVariable String feed, @RequestParam String q) {
+    public List<StopSuggestion> searchStops(@PathVariable String feed, @RequestParam String q, HttpServletResponse response) {
+        cacheFor(response, 6 * 3600);
         String query = GtfsLoader.normalize(q);
         if (query.isEmpty()) {
             return List.of();
@@ -147,18 +168,27 @@ public class BusController {
                 .toList();
     }
 
-    /** Direct buses between two places, soonest first. */
+    /** Every direct bus between two places today, in boarding order, then tomorrow's if none are left. */
     @GetMapping("/{feed}/between")
-    public List<ConnectionDto> between(@PathVariable String feed, @RequestParam String from, @RequestParam String to) {
+    public List<ConnectionDto> between(@PathVariable String feed, @RequestParam String from, @RequestParam String to,
+                                       HttpServletResponse response) {
         FeedData data = ready(feed);
+        // Short, because which buses have already gone changes through the day.
+        cacheFor(response, 60);
         ZonedDateTime now = ZonedDateTime.now(data.zone());
-        return Connections.find(data, from, to, now.getDayOfWeek().getValue(), now.toLocalTime().toSecondOfDay()).stream()
-                .limit(MAX_RESULTS)
+        int nowSec = now.toLocalTime().toSecondOfDay();
+        Double radius = registry.get(feed).feed().stopRadiusKm();
+        // Many rows share a service, so each service's summary (with its live bus count) is made once.
+        Map<String, ServiceSummary> summaries = new HashMap<>();
+        return Connections.find(data, from, to, now.getDayOfWeek().getValue(), nowSec,
+                        radius != null ? radius : Connections.WALKABLE_KM).stream()
+                .limit(MAX_TIMETABLE_ROWS)
                 .map(k -> {
                     Service s = k.service();
-                    return new ConnectionDto(summary(s, now), k.boardSec(), k.alightSec(), (k.alightSec() - k.boardSec()) / 60,
+                    return new ConnectionDto(summaries.computeIfAbsent(s.id, id -> summary(feed, s, now)), k.trip().id(),
+                            k.boardSec(), k.alightSec(), (k.alightSec() - k.boardSec()) / 60,
                             s.km[k.alightStopIndex()] - s.km[k.boardStopIndex()], s.stops.get(k.boardStopIndex()).name(),
-                            s.stops.get(k.alightStopIndex()).name(), k.tomorrow());
+                            s.stops.get(k.alightStopIndex()).name(), k.tomorrow(), !k.tomorrow() && k.boardSec() < nowSec);
                 })
                 .toList();
     }
@@ -170,6 +200,10 @@ public class BusController {
         if (s == null) {
             throw notFound("No such service");
         }
+        return busesOn(feed, s);
+    }
+
+    private List<LiveBus> busesOn(String feed, Service s) {
         long now = Instant.now().getEpochSecond();
         List<LiveBus> buses = new ArrayList<>();
         for (String routeId : s.routeIds) {
@@ -216,7 +250,12 @@ public class BusController {
         }
     }
 
-    private static ServiceSummary summary(Service s, ZonedDateTime now) {
+    /** Buses on the route that haven't yet reached its last stop, so a passenger could still catch them. */
+    private int busesRunning(String feed, Service s) {
+        return (int) busesOn(feed, s).stream().filter(b -> s.totalKm() - b.km() > ROUTE_END_KM).count();
+    }
+
+    private ServiceSummary summary(String feed, Service s, ZonedDateTime now) {
         int weekday = now.getDayOfWeek().getValue();
         int nowSec = now.toLocalTime().toSecondOfDay();
         int count = 0;
@@ -232,7 +271,7 @@ public class BusController {
         }
         int[] durations = s.trips.stream().mapToInt(Trip::durationSec).sorted().toArray();
         return new ServiceSummary(s.id, s.number, s.operator, s.label, s.from(), s.to(), s.stops.size(), s.totalKm(),
-                count, durations[durations.length / 2] / 60, next);
+                count, durations[durations.length / 2] / 60, next, busesRunning(feed, s));
     }
 
     private static FeedDto toDto(FeedRegistry.Entry e) {

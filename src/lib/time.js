@@ -18,12 +18,12 @@ export function clockForTrip(nowSec, startSec, durationSec) {
   return startSec + durationSec > DAY_SEC && nowSec < startSec + durationSec - DAY_SEC ? nowSec + DAY_SEC : nowSec
 }
 
-/** Formats seconds since midnight, such as 52200 as 2:30 pm. */
+/** Formats seconds since midnight as 24-hour time, such as 52200 as 14:30. */
 export function formatClock(sec) {
   const wrapped = ((Math.round(sec / 60) * 60) % DAY_SEC + DAY_SEC) % DAY_SEC
   const h = Math.floor(wrapped / 3600)
   const m = Math.floor((wrapped % 3600) / 60)
-  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'am' : 'pm'}`
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
 
 export function formatDuration(minutes) {

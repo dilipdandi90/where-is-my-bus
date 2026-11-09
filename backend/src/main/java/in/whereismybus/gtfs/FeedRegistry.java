@@ -11,12 +11,14 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -40,15 +42,55 @@ public class FeedRegistry {
             .connectTimeout(Duration.ofSeconds(30))
             .build();
 
-    public FeedRegistry(FeedProperties props) {
+    private final boolean loadFeeds;
+
+    /** @param loadFeeds false only for the build-time startup run that records which classes Java uses */
+    public FeedRegistry(FeedProperties props, @Value("${wimb.load-feeds:true}") boolean loadFeeds) {
         this.props = props;
+        this.loadFeeds = loadFeeds;
     }
 
     @PostConstruct
     void start() {
         props.feeds().forEach(f -> entries.put(f.id(), new Entry(f, Status.LOADING, null, null)));
-        // One at a time, because parsing several large feeds at once needs far more memory than holding them.
-        Thread.ofVirtual().name("feed-loader").start(() -> props.feeds().forEach(this::refresh));
+        if (loadFeeds) {
+            Thread.ofVirtual().name("feed-loader").start(this::loadAll);
+        }
+    }
+
+    /**
+     * Loads the smallest feeds first, so on a small server Pune is usable in about a minute instead of
+     * waiting behind Mumbai and Maharashtra ST. Each feed is downloaded only when its turn comes, as
+     * downloading everything up front was measured to delay the first one by minutes on 0.1 CPU.
+     * One at a time, because parsing several large feeds at once needs far more memory than holding them.
+     */
+    private void loadAll() {
+        Map<String, Long> sizes = new ConcurrentHashMap<>();
+        props.feeds().forEach(f -> sizes.put(f.id(), sizeOf(f)));
+        props.feeds().stream().sorted(Comparator.comparingLong(f -> sizes.get(f.id()))).forEach(this::refresh);
+    }
+
+    /** The cached file's size, or else the size the server reports, without downloading the file. */
+    private long sizeOf(FeedProperties.Feed feed) {
+        try {
+            return Files.size(zipPath(feed));
+        } catch (IOException ignored) {
+            // Not cached yet, so ask the server.
+        }
+        try {
+            HttpRequest head = HttpRequest.newBuilder(URI.create(feed.url()))
+                    .method("HEAD", HttpRequest.BodyPublishers.noBody())
+                    .timeout(Duration.ofSeconds(20))
+                    .header("User-Agent", "where-is-my-bus/0.1")
+                    .build();
+            return http.send(head, HttpResponse.BodyHandlers.discarding()).headers()
+                    .firstValueAsLong("Content-Length").orElse(Long.MAX_VALUE);
+        } catch (IOException e) {
+            return Long.MAX_VALUE;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Long.MAX_VALUE;
+        }
     }
 
     /** Also picks up feeds that failed, so a network drop at startup only costs a few minutes. */

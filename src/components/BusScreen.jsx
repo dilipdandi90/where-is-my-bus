@@ -147,7 +147,7 @@ export default function BusScreen({ feedId, feed, serviceId }) {
         <Message title="No departures listed today">This feed doesn't show this bus running today.</Message>
       ) : (
         // The bottom padding keeps the last stop and its alert bell clear of the refresh button.
-        <main className="pb-44">
+        <main className="pb-48">
           {firing && (
             <div role="alert" className="flex items-center gap-3 bg-late px-4 py-3 font-semibold text-white">
               <p className="flex-1">{service.stops[alarm].name} is coming up. Get ready!</p>

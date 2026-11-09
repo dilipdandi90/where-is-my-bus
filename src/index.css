@@ -1,0 +1,100 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-ink: #0f1f3d;
+  --color-ink-soft: #566079;
+  --color-paper: #f2f5fb;
+  --color-card: #ffffff;
+  --color-line: #dfe5f0;
+  --color-road: #ff8a2b;
+  --color-road-dark: #b84f00;
+  --color-tint: #fff1e4;
+  --color-ontime: #0b7f54;
+  --color-late: #cf2f1f;
+  --font-sans: 'Segoe UI', Roboto, 'Noto Sans', system-ui, sans-serif;
+}
+
+body {
+  background: #e6ebf5;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+button,
+a,
+input,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-road-dark);
+  outline-offset: 2px;
+}
+
+/* Text boxes show focus on the rounded field around them instead. */
+input:not([type='checkbox']):focus-visible {
+  outline: none;
+}
+
+.app-header {
+  background: linear-gradient(135deg, #0f1f3d, #1d3f7c);
+}
+
+/* The departure list rises from the bottom like a phone's own pickers. */
+.sheet {
+  position: fixed;
+  inset: auto 0 0;
+  width: 100%;
+  max-width: 36rem;
+  margin: 0 auto;
+  max-height: 75dvh;
+  border: 0;
+  border-radius: 1.25rem 1.25rem 0 0;
+  padding: 0;
+  background: var(--color-card);
+  color: var(--color-ink);
+}
+
+.sheet[open] {
+  display: flex;
+  flex-direction: column;
+  animation: sheet-up 0.2s ease-out;
+}
+
+.sheet::backdrop {
+  background: rgb(15 31 61 / 0.5);
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(2rem);
+    opacity: 0;
+  }
+}
+
+@keyframes pulse-ring {
+  from {
+    transform: scale(0.8);
+    opacity: 0.7;
+  }
+  to {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+.pulse-ring {
+  animation: pulse-ring 1.8s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-ring {
+    animation: none;
+    opacity: 0;
+  }
+
+  .sheet[open] {
+    animation: none;
+  }
+}

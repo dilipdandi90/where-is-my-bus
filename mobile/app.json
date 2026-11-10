@@ -38,7 +38,15 @@
         }
       ],
       "expo-audio",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#13274d",
+          "image": "./assets/splash-bus.png",
+          "imageWidth": 96
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false

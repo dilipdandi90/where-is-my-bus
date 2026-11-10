@@ -1,4 +1,4 @@
-package `in`.whereismybus.celltowers
+package com.whereismybus.celltowers
 
 import android.Manifest
 import android.content.Context
@@ -82,7 +82,7 @@ class CellTowersModule : Module() {
     return when {
       info is CellInfoLte -> {
         val id: CellIdentityLte = info.cellIdentity
-        cell("lte", mcc(id.mccString, id.mcc), mnc(id.mncString, id.mnc), id.tac, id.ci.toLong(), info.cellSignalStrength, serving)
+        cell("lte", modern { id.mccString } ?: legacy { id.mcc }, modern { id.mncString } ?: legacy { id.mnc }, id.tac, id.ci.toLong(), info.cellSignalStrength, serving)
       }
       Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && info is CellInfoNr -> {
         val id = info.cellIdentity as CellIdentityNr
@@ -90,24 +90,24 @@ class CellTowersModule : Module() {
       }
       info is CellInfoWcdma -> {
         val id: CellIdentityWcdma = info.cellIdentity
-        cell("wcdma", mcc(id.mccString, id.mcc), mnc(id.mncString, id.mnc), id.lac, id.cid.toLong(), info.cellSignalStrength, serving)
+        cell("wcdma", modern { id.mccString } ?: legacy { id.mcc }, modern { id.mncString } ?: legacy { id.mnc }, id.lac, id.cid.toLong(), info.cellSignalStrength, serving)
       }
       info is CellInfoGsm -> {
         val id: CellIdentityGsm = info.cellIdentity
-        cell("gsm", mcc(id.mccString, id.mcc), mnc(id.mncString, id.mnc), id.lac, id.cid.toLong(), info.cellSignalStrength, serving)
+        cell("gsm", modern { id.mccString } ?: legacy { id.mcc }, modern { id.mncString } ?: legacy { id.mnc }, id.lac, id.cid.toLong(), info.cellSignalStrength, serving)
       }
       else -> null
     }
   }
 
-  // The string forms arrived in Android 9; older versions only have the deprecated numbers.
-  @Suppress("DEPRECATION")
-  private fun mcc(text: String?, number: Int): String? =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) text else number.toString()
+  // The string forms of mcc and mnc arrived in Android 9, and older versions only have the deprecated
+  // numbers. Each is only called on the versions that have it, as calling a missing method crashes.
+  private inline fun modern(read: () -> String?): String? =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) read() else null
 
   @Suppress("DEPRECATION")
-  private fun mnc(text: String?, number: Int): String? =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) text else number.toString()
+  private inline fun legacy(read: () -> Int): String? =
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) read().toString() else null
 
   private fun cell(
     radio: String,

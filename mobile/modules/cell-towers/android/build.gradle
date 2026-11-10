@@ -3,11 +3,11 @@ plugins {
   id 'expo-module-gradle-plugin'
 }
 
-group = 'in.whereismybus.celltowers'
+group = 'com.whereismybus.celltowers'
 version = '0.1.0'
 
 android {
-  namespace "in.whereismybus.celltowers"
+  namespace "com.whereismybus.celltowers"
   defaultConfig {
     versionCode 1
     versionName "0.1.0"

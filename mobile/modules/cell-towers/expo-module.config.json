@@ -1,6 +1,6 @@
 {
   "platforms": ["android"],
   "android": {
-    "modules": ["in.whereismybus.celltowers.CellTowersModule"]
+    "modules": ["com.whereismybus.celltowers.CellTowersModule"]
   }
 }

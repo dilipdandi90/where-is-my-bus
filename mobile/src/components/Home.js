@@ -449,15 +449,16 @@ export function FeedNotice({ feed }) {
     <View style={styles.notice}>
       {feed.note ? <Text style={[styles.small, { marginBottom: 6 }]}>{feed.note}</Text> : null}
       {feed.hasLiveBuses && <Text style={[styles.small, { marginBottom: 6 }]}>{"Live positions don't cover every bus."}</Text>}
-      <Text style={styles.small}>
+      {/* <Text style={styles.small}>
         Data: {feed.source}
         {feed.official ? '' : ' (unofficial)'}
-      </Text>
+      </Text> */}
     </View>
   )
 }
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create
+({
   header: { backgroundColor: colors.header, paddingHorizontal: 20, paddingBottom: 16 },
   title: { color: colors.paper, fontSize: 20, fontWeight: '800', letterSpacing: -0.3 },
   tagline: { color: 'rgba(242,245,251,0.7)', fontSize: 12, marginTop: 2 },

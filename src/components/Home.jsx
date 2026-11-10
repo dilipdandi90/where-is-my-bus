@@ -4,7 +4,9 @@ import { useData, useDebounced, useSessionState, useStoredState, useTick } from 
 import { formatClock, formatDuration, formatKm, secondsNow } from '../lib/time.js'
 import { track } from '../lib/usage.js'
 import FeedNotice from './FeedNotice.jsx'
-import { BusIcon, ErrorMessage, Message, NumberPlate, PinIcon, ReloadIcon, SearchIcon, SwapIcon } from './ui.jsx'
+import MetroLines from './MetroLines.jsx'
+import { count, isMetro, lineColours, wordsFor } from '../lib/words.js'
+import { BusIcon, ErrorMessage, Message, PinIcon, PlatformChip, ReloadIcon, SearchIcon, ServicePlate, SwapIcon, TrainIcon } from './ui.jsx'
 
 const MAX_RECENT = 6
 // Saved results show instantly, then the fresh ones replace them. Searches carry live counts and
@@ -20,19 +22,19 @@ export default function Home({ feeds, failed }) {
   const feed = feeds?.find((f) => f.id === storedFeedId) ?? feeds?.[0]
 
   const remember = (feedId, s) => {
-    const entry = { feedId, serviceId: s.serviceId, number: s.number, from: s.from, to: s.to, operator: s.operator }
+    const entry = { feedId, serviceId: s.serviceId, number: s.number, from: s.from, to: s.to, operator: s.operator, color: s.color, textColor: s.textColor }
     setRecent([entry, ...recent.filter((r) => r.serviceId !== s.serviceId)].slice(0, MAX_RECENT))
   }
 
   return (
     <>
-      <header className="app-header px-5 pt-6 pb-5 text-paper">
-        <h1 className="flex items-center gap-2 text-2xl font-extrabold tracking-tight">
-          <BusIcon className="size-7 text-road" />
+      <header className="app-header px-5 pt-5 pb-4 text-paper">
+        <h1 className="flex items-center gap-2 text-xl font-extrabold tracking-tight">
+          <BusIcon className="size-6 text-road" />
           Where Is My Bus
         </h1>
-        <p className="mt-1 text-sm text-paper/75">Follow your bus from your phone, with no GPS needed on the bus.</p>
-        {feeds && <FeedPicker feeds={feeds} selected={feed?.id} onSelect={setFeedId} />}
+        <p className="mt-0.5 text-xs text-paper/70">Live bus and metro tracking, with no GPS needed on board.</p>
+        {feeds && <FeedPicker feeds={feeds} selected={feed} onSelect={setFeedId} />}
       </header>
 
       {failed && !feeds && (
@@ -44,8 +46,8 @@ export default function Home({ feeds, failed }) {
         <main className="px-4 py-4">
           <div role="tablist" aria-label="Search type" className="mb-3 grid grid-cols-2 rounded-xl bg-line/70 p-1 text-sm font-semibold">
             {[
-              ['number', 'Bus number or place'],
-              ['between', 'Between two stops'],
+              ['number', wordsFor(feed).searchTab],
+              ['between', wordsFor(feed).betweenTab],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -60,12 +62,12 @@ export default function Home({ feeds, failed }) {
           </div>
 
           {feed.status === 'LOADING' && (
-            <Message title={`Getting ${feed.name} bus data…`}>The server is starting up after a quiet spell. This can take a few minutes.</Message>
+            <Message title={`Getting ${feed.name} timetable…`}>The server is starting up after a quiet spell. This can take a few minutes.</Message>
           )}
           {feed.status === 'FAILED' && (
             <ErrorMessage
               title={`${feed.name} isn't available right now`}
-              error={{ message: "We couldn't get its bus data. We'll keep trying, so check back in a few minutes." }}
+              error={{ message: "We couldn't get its timetable. We'll keep trying, so check back in a few minutes." }}
             />
           )}
           {feed.status === 'READY' &&
@@ -84,23 +86,91 @@ export default function Home({ feeds, failed }) {
   )
 }
 
+/**
+ * A short name that fits a small button: the first place in the name ("Mumbai" from "Mumbai, Thane &
+ * Kalyan"), or the operator when the name is long ("MSRTC" for "Maharashtra ST").
+ */
+function shortName(feed) {
+  const place = feed.name.split(/[,&]/)[0].trim()
+  return place.length <= 10 ? place : feed.operators.split(',')[0].trim()
+}
+
+/**
+ * Bus or metro first, then where. Two small rows rather than a tile per region, so the search below
+ * stays on screen. The last region picked for each is remembered, so switching back is one tap.
+ */
 function FeedPicker({ feeds, selected, onSelect }) {
+  const [lastBus, setLastBus] = useStoredState('wimb.lastBusFeed', null)
+  const [lastMetro, setLastMetro] = useStoredState('wimb.lastMetroFeed', null)
+  const metro = isMetro(selected)
+  const busFeeds = feeds.filter((f) => !isMetro(f))
+  const metroFeeds = feeds.filter((f) => isMetro(f))
+  const shown = metro ? metroFeeds : busFeeds
+
+  const pick = (f) => {
+    if (isMetro(f)) setLastMetro(f.id)
+    else setLastBus(f.id)
+    onSelect(f.id)
+  }
+  const switchTo = (toMetro) => {
+    if (toMetro === metro) return
+    // Remembers where they were, even if it was picked before this switch existed.
+    if (selected) {
+      if (metro) setLastMetro(selected.id)
+      else setLastBus(selected.id)
+    }
+    const list = toMetro ? metroFeeds : busFeeds
+    const remembered = list.find((f) => f.id === (toMetro ? lastMetro : lastBus))
+    if (list.length > 0) pick(remembered ?? list[0])
+  }
+
   return (
-    <div className="mt-4 grid grid-cols-2 gap-2">
-      {feeds.map((f) => (
-        <button
-          key={f.id}
-          onClick={() => onSelect(f.id)}
-          aria-pressed={f.id === selected}
-          // An odd one out at the end takes the full width, so the grid has no gap.
-          className={`min-w-0 rounded-xl px-3.5 py-2 text-left leading-tight last:odd:col-span-2 ${
-            f.id === selected ? 'bg-road text-ink' : 'bg-paper/10 text-paper'
-          }`}
-        >
-          <span className="block text-sm font-semibold">{f.name}</span>
-          <span className="block text-xs opacity-75">{f.operators}</span>
-        </button>
-      ))}
+    <div className="mt-3.5">
+      <div role="tablist" aria-label="Bus or metro" className="grid grid-cols-2 gap-1 rounded-2xl bg-paper/10 p-1">
+        {[
+          [false, 'Bus', BusIcon, busFeeds.length],
+          [true, 'Metro', TrainIcon, metroFeeds.length],
+        ].map(([isMetroTab, label, Icon, available]) => (
+          <button
+            key={label}
+            role="tab"
+            aria-selected={metro === isMetroTab}
+            disabled={available === 0}
+            onClick={() => switchTo(isMetroTab)}
+            className={`flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-bold transition-colors disabled:opacity-40 ${
+              metro === isMetroTab ? 'bg-card text-ink shadow-sm' : 'text-paper/80'
+            }`}
+          >
+            <Icon className="size-5" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {shown.length > 1 && (
+        <div role="radiogroup" aria-label={metro ? 'Metro' : 'Region'} className="mt-2.5 flex gap-1.5">
+          {shown.map((f) => (
+            <button
+              key={f.id}
+              role="radio"
+              aria-checked={f.id === selected?.id}
+              aria-label={f.name}
+              onClick={() => pick(f)}
+              className={`min-w-0 flex-1 truncate rounded-full px-2 py-1.5 text-xs font-semibold transition-colors ${
+                f.id === selected?.id ? 'bg-road text-ink' : 'bg-paper/10 text-paper/85'
+              }`}
+            >
+              {shortName(f)}
+            </button>
+          ))}
+        </div>
+      )}
+      {/* The full name and operators of what's picked, so the short button names stay clear. */}
+      {selected && (
+        <p className="mt-2 truncate text-center text-xs text-paper/70">
+          <span className="font-semibold text-paper">{selected.name}</span> · {selected.operators}
+        </p>
+      )}
     </div>
   )
 }
@@ -108,7 +178,12 @@ function FeedPicker({ feeds, selected, onSelect }) {
 function BusSearch({ feed, recent, onOpen }) {
   const [query, setQuery] = useSessionState(`wimb.${feed.id}.query`, '')
   const q = useDebounced(query.trim(), 250)
-  const { data, error, loading, retry } = useData(q ? `bus|${feed.id}|${q}` : null, (signal) => api.buses(feed.id, q, signal), { cacheMs: CACHE_SEARCH_MS })
+  const metro = isMetro(feed)
+  const words = wordsFor(feed)
+  // A metro has only a few lines, so all of them show before anything is typed. Every line's name
+  // ends in "Line", which the search matches.
+  const lookup = q || (metro ? 'line' : '')
+  const { data, error, loading, retry } = useData(lookup ? `bus|${feed.id}|${lookup}` : null, (signal) => api.buses(feed.id, lookup, signal), { cacheMs: CACHE_SEARCH_MS })
 
   // Only once they've stopped typing, so "1", "11" and "115" count as one search.
   const settled = useDebounced(q, 1500)
@@ -121,25 +196,25 @@ function BusSearch({ feed, recent, onOpen }) {
     <>
       <label className="flex items-center gap-2.5 rounded-2xl border border-line bg-card px-4 shadow-sm focus-within:border-road">
         <SearchIcon className="size-5 shrink-0 text-ink-soft" />
-        <span className="sr-only">Bus number or place</span>
+        <span className="sr-only">{words.searchTab}</span>
         <input
           type="search"
           autoComplete="off"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={feed.id === 'msrtc' ? 'Town name, such as Solapur' : 'Bus number or place'}
+          placeholder={feed.id === 'msrtc' ? 'Town name, such as Solapur' : words.searchPlaceholder}
           className="min-w-0 flex-1 bg-transparent py-3.5 text-base outline-none placeholder:text-ink-soft/70"
         />
       </label>
 
-      {!q && recent.length > 0 && (
+      {!q && !metro && recent.length > 0 && (
         <section className="mt-5">
           <h2 className="mb-2 text-xs font-semibold tracking-wide text-ink-soft uppercase">Recent</h2>
           <ul className="space-y-2">
             {recent.map((r, i) => (
               <li key={r.serviceId} className="card-in" style={stagger(i)}>
                 <a href={`#/${r.feedId}/bus/${r.serviceId}`} className="flex items-center gap-3 rounded-2xl border border-line bg-card p-3 shadow-sm">
-                  {!feed.numbersAreCodes && <NumberPlate number={r.number} />}
+                  {!feed.numbersAreCodes && <ServicePlate metro={metro} service={r} />}
                   <span className="min-w-0 truncate text-sm">
                     {r.from} → {r.to}
                   </span>
@@ -150,10 +225,15 @@ function BusSearch({ feed, recent, onOpen }) {
         </section>
       )}
 
-      {q && error && <ErrorMessage title="Search didn't work" error={error} onRetry={retry} />}
-      {q && loading && <p className="py-6 text-center text-sm text-ink-soft">Searching…</p>}
-      {q && data?.length === 0 && <Message title={`No buses found for “${q}”`}>Try part of the number, or a place on the route.</Message>}
-      {q && data?.length > 0 && (
+      {lookup && error && <ErrorMessage title="Search didn't work" error={error} onRetry={retry} />}
+      {lookup && loading && <p className="py-6 text-center text-sm text-ink-soft">Searching…</p>}
+      {q && data?.length === 0 && (
+        <Message title={`No ${words.buses} found for “${q}”`}>
+          {metro ? 'Try a line number or colour, such as 1 or Aqua, or search between two stations.' : 'Try part of the number, or a place on the route.'}
+        </Message>
+      )}
+      {lookup && data?.length > 0 && metro && <MetroLines feed={feed} services={data} onOpen={onOpen} />}
+      {lookup && data?.length > 0 && !metro && (
         <ul className="mt-3 space-y-2.5">
           {data.map((s, i) => (
             <li key={s.serviceId} className="card-in" style={stagger(i)}>
@@ -170,16 +250,24 @@ function BusSearch({ feed, recent, onOpen }) {
 const stagger = (i) => ({ animationDelay: `${Math.min(i * 45, 400)}ms` })
 
 function ServiceCard({ feed, service: s, onOpen, children }) {
+  const metro = isMetro(feed)
+  const words = wordsFor(feed)
   return (
     <a
       href={`#/${feed.id}/bus/${s.serviceId}`}
       onClick={onOpen}
+      // A metro card carries its line's colour down the left edge, as on station maps.
+      style={metro && s.color ? { ...lineColours(s.color), borderLeft: `6px solid #${s.color}` } : undefined}
       className="press block rounded-2xl border border-line bg-card p-3.5 shadow-sm transition-[border-color,box-shadow,translate] hover:-translate-y-0.5 hover:border-road hover:shadow-md"
     >
       {!feed.numbersAreCodes && (
         <div className="mb-2 flex items-center justify-between gap-2">
-          <NumberPlate number={s.number} />
-          {s.operator && <span className="text-xs font-semibold text-ink-soft">{s.operator}</span>}
+          <ServicePlate metro={metro} service={s} />
+          {metro ? (
+            <span className="text-xs font-semibold text-ink-soft">{s.label}</span>
+          ) : (
+            s.operator && <span className="text-xs font-semibold text-ink-soft">{s.operator}</span>
+          )}
         </div>
       )}
       <p className="font-semibold">
@@ -192,13 +280,16 @@ function ServiceCard({ feed, service: s, onOpen, children }) {
       )}
       {children ?? (
         <p className="mt-1 text-xs text-ink-soft">
-          {s.stops} stops · {formatKm(s.km)} · about {formatDuration(s.typicalMinutes)}
+          {s.stops} {words.stops} · {formatKm(s.km)}
+          {s.timetabled !== false && ` · about ${formatDuration(s.typicalMinutes)}`}
           <br />
           {/* Live buses outrank the timetable, which often ends early in these feeds. */}
           {s.busesRunning > 0 ? (
             <span className="font-semibold text-ontime">
-              {s.busesRunning} {s.busesRunning === 1 ? 'bus' : 'buses'} running now
+              {count(words, s.busesRunning)} running now
             </span>
+          ) : s.timetabled === false ? (
+            'No timetable published yet · track it live on board'
           ) : s.departuresToday === 0 ? (
             'No departures listed today'
           ) : s.nextDepartureSec != null ? (
@@ -246,8 +337,8 @@ function BetweenSearch({ feed, onOpen }) {
       }}
     >
       <div className="relative space-y-2">
-        <StopInput feedId={feed.id} label="From" value={from} onChange={setFrom} onListOpen={setListOpen} />
-        <StopInput feedId={feed.id} label="To" value={to} onChange={setTo} onListOpen={setListOpen} />
+        <StopInput feedId={feed.id} words={wordsFor(feed)} label="From" value={from} onChange={setFrom} onListOpen={setListOpen} />
+        <StopInput feedId={feed.id} words={wordsFor(feed)} label="To" value={to} onChange={setTo} onListOpen={setListOpen} />
         <button
           type="button"
           onClick={swap}
@@ -261,15 +352,19 @@ function BetweenSearch({ feed, onOpen }) {
           <SwapIcon className="size-4" />
         </button>
       </div>
-      <p className="mt-2 px-1 text-xs text-ink-soft">Type each stop, then pick it from the list.</p>
+      <p className="mt-2 px-1 text-xs text-ink-soft">Type each {wordsFor(feed).stop}, then pick it from the list.</p>
       <button type="submit" disabled={!from.trim() || !to.trim()} className="mt-2 w-full rounded-2xl bg-ink py-3.5 font-semibold text-paper disabled:opacity-40">
-        Find buses
+        Find {wordsFor(feed).buses}
       </button>
 
       {search && loading && <p className="py-6 text-center text-sm text-ink-soft">Searching…</p>}
       {search && error && <ErrorMessage title="Search didn't work" error={error} onRetry={retry} />}
       {search && data?.length === 0 && (
-        <Message title="No direct bus between these stops">You may need to change buses. Try a major stop nearby, or search for a bus number.</Message>
+        isMetro(feed) ? (
+          <Message title="No direct line between these stations">You may need to change lines, for example at District Court.</Message>
+        ) : (
+          <Message title="No direct bus between these stops">You may need to change buses. Try a major stop nearby, or search for a bus number.</Message>
+        )
       )}
       {data?.length > 0 && <Timetable feed={feed} rows={data} onOpen={onOpen} />}
     </form>
@@ -283,8 +378,10 @@ function BetweenSearch({ feed, onOpen }) {
 function Timetable({ feed, rows, onOpen }) {
   useTick(30_000)
   const nowSec = secondsNow(feed.timezone ?? 'Asia/Kolkata')
-  const today = rows.filter((r) => !r.tomorrow)
-  const tomorrow = rows.filter((r) => r.tomorrow)
+  const words = wordsFor(feed)
+  const untimed = rows.filter((r) => r.untimed)
+  const today = rows.filter((r) => !r.tomorrow && !r.untimed)
+  const tomorrow = rows.filter((r) => r.tomorrow && !r.untimed)
   const nextIndex = today.findIndex((r) => !r.departed)
   const leftToday = today.filter((r) => !r.departed).length
 
@@ -292,7 +389,7 @@ function Timetable({ feed, rows, onOpen }) {
     <div className="mt-4 space-y-4">
       {today.length > 0 && (
         <TimetableSection
-          title={`Today · ${today.length} ${today.length === 1 ? 'bus' : 'buses'}`}
+          title={`Today · ${count(words, today.length)}`}
           subtitle={leftToday === 0 ? 'All have left for today' : `${leftToday} still to go`}
           feed={feed}
           rows={today}
@@ -303,7 +400,7 @@ function Timetable({ feed, rows, onOpen }) {
       )}
       {tomorrow.length > 0 && (
         <TimetableSection
-          title={`Tomorrow · ${tomorrow.length} ${tomorrow.length === 1 ? 'bus' : 'buses'}`}
+          title={`Tomorrow · ${count(words, tomorrow.length)}`}
           feed={feed}
           rows={tomorrow}
           nextIndex={leftToday === 0 ? 0 : -1}
@@ -311,7 +408,44 @@ function Timetable({ feed, rows, onOpen }) {
           onOpen={onOpen}
         />
       )}
+      {untimed.length > 0 && <UntimedSection feed={feed} rows={untimed} onOpen={onOpen} />}
     </div>
+  )
+}
+
+/** Lines that go there but have no published timetable, so they have no times to list. */
+function UntimedSection({ feed, rows, onOpen }) {
+  const words = wordsFor(feed)
+  return (
+    <section>
+      <div className="mb-1.5 flex items-baseline justify-between px-1">
+        <h2 className="text-sm font-bold">No timetable published</h2>
+        <span className="text-xs text-ink-soft">Track live on board</span>
+      </div>
+      <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-card shadow-sm">
+        {rows.map((r, i) => (
+          <li key={r.tripId} className="card-in" style={stagger(i)}>
+            <a
+              href={`#/${feed.id}/bus/${r.service.serviceId}/${encodeURIComponent(r.tripId)}`}
+              onClick={() => onOpen(feed.id, r.service)}
+              className="press flex items-center gap-3 px-4 py-3 transition-colors hover:bg-paper"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2">
+                  <ServicePlate metro={isMetro(feed)} service={r.service} />
+                  <span className="truncate text-sm font-semibold">to {r.service.to}</span>
+                </span>
+                <span className="mt-0.5 block truncate text-xs text-ink-soft">
+                  {formatKm(r.km)} · from {r.boardStop}
+                  <PlatformChip platform={r.boardPlatform} />
+                </span>
+              </span>
+              <span className="shrink-0 text-right text-xs text-ink-soft">See {words.stops}</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 
@@ -329,6 +463,7 @@ function TimetableSection({ title, subtitle, feed, rows, nextIndex, nowSec, onOp
           const onTheWay = r.departed && r.alightSec > nowSec
           const gone = r.departed && !onTheWay
           const label = feed.numbersAreCodes ? r.service.to : r.service.number
+          const metro = isMetro(feed)
           return (
             <li key={`${r.tripId}-${r.tomorrow}`} className="card-in" style={stagger(i)}>
               <a
@@ -342,12 +477,13 @@ function TimetableSection({ title, subtitle, feed, rows, nextIndex, nowSec, onOp
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-2">
-                    {!feed.numbersAreCodes && <NumberPlate number={r.service.number} />}
+                    {!feed.numbersAreCodes && <ServicePlate metro={metro} service={r.service} />}
                     <span className="truncate text-sm font-semibold">{feed.numbersAreCodes ? label : `to ${r.service.to}`}</span>
                   </span>
                   <span className="mt-0.5 block truncate text-xs text-ink-soft">
                     {formatDuration(r.minutes)} · {formatKm(r.km)}
                     {r.boardStop && ` · from ${r.boardStop}`}
+                    <PlatformChip platform={r.boardPlatform} />
                   </span>
                 </span>
                 <span className="shrink-0 text-right text-xs font-semibold">
@@ -370,7 +506,7 @@ function TimetableSection({ title, subtitle, feed, rows, nextIndex, nowSec, onOp
   )
 }
 
-function StopInput({ feedId, label, value, onChange, onListOpen }) {
+function StopInput({ feedId, words, label, value, onChange, onListOpen }) {
   // Open only while typing, so the list doesn't sit over the search button once a stop is picked.
   const [open, setOpen] = useState(false)
   const q = useDebounced(value.trim(), 200)
@@ -407,7 +543,7 @@ function StopInput({ feedId, label, value, onChange, onListOpen }) {
           }}
           onFocus={() => setOpen(true)}
           onBlur={() => setOpen(false)}
-          placeholder="Stop name"
+          placeholder={words.stopPlaceholder}
           className="min-w-0 flex-1 bg-transparent py-3.5 text-base outline-none placeholder:text-ink-soft/70"
         />
         {active && loading && <ReloadIcon className="size-4 shrink-0 animate-spin text-ink-soft" />}
@@ -430,9 +566,11 @@ function StopInput({ feedId, label, value, onChange, onListOpen }) {
       {active && (
         <ul className="absolute top-full right-0 left-0 z-50 mt-1.5 max-h-64 overflow-y-auto rounded-2xl border border-line bg-card py-1.5 shadow-xl">
           {loading && suggestions.length === 0 && <li className="px-4 py-3 text-sm text-ink-soft">Searching…</li>}
-          {error && !loading && <li className="px-4 py-3 text-sm text-ink-soft">Couldn't load stops. Check your connection and try again.</li>}
+          {error && !loading && <li className="px-4 py-3 text-sm text-ink-soft">Couldn't load {words.stops}. Check your connection and try again.</li>}
           {!loading && !error && suggestions.length === 0 && (
-            <li className="px-4 py-3 text-sm text-ink-soft">No stops found for “{q}”. Check the spelling, or try a nearby landmark.</li>
+            <li className="px-4 py-3 text-sm text-ink-soft">
+              No {words.stops} found for “{q}”. Check the spelling, or try a nearby landmark.
+            </li>
           )}
           {suggestions.map((s) => (
             <li key={s.name}>

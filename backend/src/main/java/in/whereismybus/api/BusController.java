@@ -4,6 +4,7 @@ import in.whereismybus.gtfs.Connections;
 import in.whereismybus.gtfs.FeedData;
 import in.whereismybus.gtfs.FeedData.Service;
 import in.whereismybus.gtfs.FeedData.Trip;
+import in.whereismybus.gtfs.FeedProperties;
 import in.whereismybus.gtfs.FeedRegistry;
 import in.whereismybus.gtfs.Geo;
 import in.whereismybus.gtfs.GtfsLoader;
@@ -55,27 +56,42 @@ public class BusController {
     public record FeedDto(String id, String name, String region, String operators, String status, String error,
                           String source, String sourceUrl, boolean official, boolean numbersAreCodes, boolean hasLiveBuses, LocalDate validTo, boolean expired,
                           boolean timesRepaired, String note, String timezone, Integer services, Integer trips,
-                          Integer stops, Instant loadedAt) {}
+                          Integer stops, Instant loadedAt, String mode) {}
 
+    /**
+     * @param color the line's colour as hex digits, empty if the feed gives none
+     * @param timetabled false when no timetable is published for it
+     */
     public record ServiceSummary(String serviceId, String number, String operator, String label, String from,
                                  String to, int stops, double km, int departuresToday, int typicalMinutes,
-                                 Integer nextDepartureSec, int busesRunning) {}
+                                 Integer nextDepartureSec, int busesRunning, String color, String textColor,
+                                 boolean timetabled) {}
 
-    public record StopDto(String id, String name, double lat, double lon, double km) {}
+    /** @param platform the platform number, where the feed gives one, otherwise empty */
+    public record StopDto(String id, String name, double lat, double lon, double km, String platform) {}
 
     public record Departure(String tripId, int startSec, int durationSec) {}
 
+    /**
+     * @param untimedTripId for a line with no timetable, the trip to track and share live, otherwise null
+     */
     public record ServiceDetail(String serviceId, String number, String operator, String label, String from,
                                 String to, double km, String timezone, List<StopDto> stops,
-                                List<Departure> departures) {}
+                                List<Departure> departures, String color, String textColor, boolean timetabled,
+                                String untimedTripId) {}
 
     public record TripDetail(String tripId, String serviceId, int startSec, int[] offsets) {}
 
     public record StopSuggestion(String name, double lat, double lon) {}
 
-    /** @param departed whether this bus has already left the boarding stop today */
-    public record ConnectionDto(ServiceSummary service, String tripId, int boardSec, int alightSec, int minutes, double km,
-                                String boardStop, String alightStop, boolean tomorrow, boolean departed) {}
+    /**
+     * @param departed whether this bus has already left the boarding stop today
+     * @param untimed a line with no timetable: boardSec, alightSec and minutes are null
+     * @param boardPlatform the platform to board from, where the feed gives one, otherwise empty
+     */
+    public record ConnectionDto(ServiceSummary service, String tripId, Integer boardSec, Integer alightSec, Integer minutes,
+                                double km, String boardStop, String alightStop, boolean tomorrow, boolean departed,
+                                boolean untimed, String boardPlatform) {}
 
     public record LiveStatus(int riders, Double km, String source, Integer ageSec) {}
 
@@ -133,13 +149,14 @@ public class BusController {
         List<StopDto> stops = new ArrayList<>(s.stops.size());
         for (int i = 0; i < s.stops.size(); i++) {
             var st = s.stops.get(i);
-            stops.add(new StopDto(st.id(), st.name(), st.lat(), st.lon(), s.km[i]));
+            stops.add(new StopDto(st.id(), st.name(), st.lat(), st.lon(), s.km[i], st.platform()));
         }
         int weekday = ZonedDateTime.now(data.zone()).getDayOfWeek().getValue();
         List<Departure> departures = s.trips.stream().filter(t -> t.runsOn(weekday))
                 .map(t -> new Departure(t.id(), t.startSec(), t.durationSec())).toList();
         return new ServiceDetail(s.id, s.number, s.operator, s.label, s.from(), s.to(), s.totalKm(),
-                data.zone().getId(), stops, departures);
+                data.zone().getId(), stops, departures, s.color, s.textColor, s.timetabled,
+                s.timetabled ? null : s.trips.getFirst().id());
     }
 
     // Trip IDs go in the query string: some contain backslashes (MSRTC's L5674\5), and the web
@@ -185,10 +202,13 @@ public class BusController {
                 .limit(MAX_TIMETABLE_ROWS)
                 .map(k -> {
                     Service s = k.service();
+                    boolean timed = !k.untimed();
                     return new ConnectionDto(summaries.computeIfAbsent(s.id, id -> summary(feed, s, now)), k.trip().id(),
-                            k.boardSec(), k.alightSec(), (k.alightSec() - k.boardSec()) / 60,
+                            timed ? k.boardSec() : null, timed ? k.alightSec() : null,
+                            timed ? (k.alightSec() - k.boardSec()) / 60 : null,
                             s.km[k.alightStopIndex()] - s.km[k.boardStopIndex()], s.stops.get(k.boardStopIndex()).name(),
-                            s.stops.get(k.alightStopIndex()).name(), k.tomorrow(), !k.tomorrow() && k.boardSec() < nowSec);
+                            s.stops.get(k.alightStopIndex()).name(), k.tomorrow(), timed && !k.tomorrow() && k.boardSec() < nowSec,
+                            k.untimed(), s.stops.get(k.boardStopIndex()).platform());
                 })
                 .toList();
     }
@@ -271,7 +291,7 @@ public class BusController {
         }
         int[] durations = s.trips.stream().mapToInt(Trip::durationSec).sorted().toArray();
         return new ServiceSummary(s.id, s.number, s.operator, s.label, s.from(), s.to(), s.stops.size(), s.totalKm(),
-                count, durations[durations.length / 2] / 60, next, busesRunning(feed, s));
+                count, durations[durations.length / 2] / 60, next, busesRunning(feed, s), s.color, s.textColor, s.timetabled);
     }
 
     private static FeedDto toDto(FeedRegistry.Entry e) {
@@ -279,11 +299,16 @@ public class BusController {
         FeedData d = e.data();
         if (d == null) {
             return new FeedDto(f.id(), f.name(), f.region(), f.operators(), e.status().name(), e.error(), f.source(),
-                    f.sourceUrl(), f.official(), f.numbersAreCodes(), f.realtimeUrl() != null, null, false, false, f.note(), null, null, null, null, null);
+                    f.sourceUrl(), f.official(), f.numbersAreCodes(), f.realtimeUrl() != null, null, false, false, f.note(), null, null, null, null, null,
+                    mode(f));
         }
         return new FeedDto(f.id(), f.name(), f.region(), f.operators(), e.status().name(), null, f.source(),
                 f.sourceUrl(), f.official(), f.numbersAreCodes(), f.realtimeUrl() != null, d.validTo(), d.expired(LocalDate.now(d.zone())), d.timesRepaired(),
-                f.note(), d.zone().getId(), d.services().size(), d.tripById().size(), d.stops().size(), d.loadedAt());
+                f.note(), d.zone().getId(), d.services().size(), d.tripById().size(), d.stops().size(), d.loadedAt(), mode(f));
+    }
+
+    private static String mode(FeedProperties.Feed f) {
+        return f.mode() == null ? "bus" : f.mode();
     }
 
     private FeedData ready(String feed) {

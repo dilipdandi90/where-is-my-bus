@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { assignBuses, atRouteEnd, defaultDeparture, departureWithBus, describeJourney } from './journey.js'
-import { clockForTrip, formatClock, formatDuration } from './time.js'
+import { assignBuses, atRouteEnd, defaultDeparture, departureWithBus, describeJourney, nextStopInfo, pointAtKm } from './journey.js'
+import { clockForTrip, formatClock, formatDistance, formatDuration } from './time.js'
 
 const stops = [
   { km: 0, lat: 18, lon: 73 },
@@ -162,4 +162,47 @@ test('formats times for people', () => {
   assert.equal(formatDuration(45), '45 min')
   assert.equal(formatDuration(120), '2 h')
   assert.equal(formatDuration(135), '2 h 15 min')
+})
+
+test('distance to the next stop counts down in metres for the last kilometre', () => {
+  assert.equal(formatDistance(0.4567), '460 m')
+  assert.equal(formatDistance(0.999), '1.0 km')
+  assert.equal(formatDistance(3.24), '3.2 km')
+  assert.equal(formatDistance(21.4), '21 km')
+  assert.equal(formatDistance(-0.01), '0 m')
+})
+
+const line = [
+  { name: 'A', km: 0, lat: 18, lon: 73 },
+  { name: 'B', km: 2, lat: 18.02, lon: 73 },
+  { name: 'C', km: 5, lat: 18.02, lon: 73.03 },
+]
+
+test('the label names the next stop and the distance to it, or the stop the bus is at', () => {
+  assert.deepEqual(nextStopInfo(line, 1.2, 0), { index: 1, name: 'B', distanceKm: 0.8 })
+  assert.deepEqual(nextStopInfo(line, 2.02, 1), { index: 1, name: 'B', distanceKm: null })
+  assert.deepEqual(nextStopInfo(line, 5, 2), { index: 2, name: 'C', distanceKm: null })
+})
+
+test('the bus is drawn on the line between the stops either side of it', () => {
+  const near = ([a, b], [c, d]) => assert.ok(Math.abs(a - c) < 1e-9 && Math.abs(b - d) < 1e-9)
+  near(pointAtKm(line, 1), [18.01, 73])
+  assert.deepEqual(pointAtKm(line, -1), [18, 73])
+  assert.deepEqual(pointAtKm(line, 9), [18.02, 73.03])
+  const [lat, lon] = pointAtKm(line, 3.5)
+  assert.ok(Math.abs(lat - 18.02) < 1e-9 && Math.abs(lon - 73.015) < 1e-9)
+})
+
+test('a line with no timetable is only placed by a live position, and never given times', () => {
+  const stops = [{ km: 0 }, { km: 2 }, { km: 5 }]
+  const trip = { startSec: 0, offsets: [0, 0, 0] }
+  const unknown = describeJourney({ stops, trip, nowSec: 36000, phoneKm: null, bus: null, live: null, mode: 'off', timetabled: false })
+  assert.equal(unknown.phase, 'unknown')
+  assert.deepEqual(unknown.eta, [null, null, null])
+  const tracked = describeJourney({ stops, trip, nowSec: 36000, phoneKm: 3, bus: null, live: null, mode: 'gps', timetabled: false })
+  assert.equal(tracked.phase, 'running')
+  assert.equal(tracked.last, 1)
+  assert.equal(tracked.source, 'gps')
+  assert.equal(tracked.delaySec, null)
+  assert.deepEqual(tracked.eta, [null, null, null])
 })

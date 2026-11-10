@@ -43,7 +43,7 @@ class LiveVehiclesTest {
 
     private LiveVehicles client(String url) {
         var feed = new FeedProperties.Feed("pune", "Pune", "Maharashtra", "PMPML", "http://unused", "s", "u", false,
-                FeedProperties.NumberRule.ROUTE_NAME, null, false, url, null);
+                FeedProperties.NumberRule.ROUTE_NAME, null, false, url, null, null);
         return new LiveVehicles(new FeedProperties("./data", 24, List.of(feed)));
     }
 

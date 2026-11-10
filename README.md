@@ -6,7 +6,8 @@ on a timeline, and track the journey using your phone's GPS or cell network.
 - **Frontend:** React and Tailwind CSS (`src/`)
 - **Backend:** Java 21 and Spring Boot (`backend/`). It downloads bus timetables, serves them to the
   app, passes rider positions between phones, and locates cell towers.
-- **Android app:** Capacitor (`android/`). It wraps the same web app and adds reading of cell towers.
+- **Mobile app:** React Native with Expo (`mobile/`). Native screens that share the website's tracking
+  logic (`src/lib/`), plus a native module that reads cell towers on Android.
 
 ## Running it
 
@@ -58,17 +59,7 @@ npm run build
 npx netlify-cli deploy --prod --dir=dist
 ```
 
-**3. Android app.** Reading cell towers needs the app, because browsers don't allow it. You need
-[Android Studio](https://developer.android.com/studio), which also installs the Android SDK and asks you to
-accept its licences. Create a file called `.env.production.local` in the project folder:
-
-```
-VITE_API_BASE=https://your-backend.example.com
-```
-
-Then run `npm run android`, and in Android Studio choose **Build > Build APK(s)**, or connect your phone with
-USB debugging on and press Run. The address is built into the app, so rebuild if it changes. Allow location
-when asked, as Android requires that permission to read towers.
+**3. Mobile app.** See [Mobile app](#mobile-app-react-native) below.
 
 To make towers known before riders have mapped them, get a free key from
 [OpenCelliD](https://opencellid.org) and set it before starting the backend:
@@ -82,6 +73,63 @@ $env:OPENCELLID_KEY = "your-key"
 ```
 npm test
 cd backend && mvnw.cmd test
+```
+
+## Mobile app (React Native)
+
+`mobile/` is an [Expo](https://expo.dev) app (SDK 58, React Native 0.88). Its screens are native, and
+its tracking, timetable and wording logic is imported from `src/lib/`, so the website and the app
+always agree. It talks to the same backend.
+
+**You need** [Node.js 22.13 or newer](https://nodejs.org) (Expo SDK 58 doesn't support older versions).
+
+### Try it on your phone in 2 minutes (Expo Go)
+
+1. Install **Expo Go** from the Play Store (or App Store) on your phone.
+2. On your computer:
+
+   ```
+   cd mobile
+   npm install
+   npx expo start
+   ```
+
+3. Scan the QR code shown in the terminal with Expo Go (on iPhone, with the Camera app). Your phone and
+   computer must be on the same Wi-Fi; if they aren't, run `npx expo start --tunnel` instead.
+
+Everything works in Expo Go except reading cell towers directly: Expo Go can only run its own native
+code, so **Cell tower** mode uses the phone's network location there.
+
+### Install the full app (APK with cell towers)
+
+Expo builds the APK in the cloud for free, so Android Studio isn't needed:
+
+```
+cd mobile
+npx eas-cli@latest login        # free Expo account
+npx eas-cli@latest build -p android --profile preview
+```
+
+When it finishes, open the link it prints on your phone to download and install the APK. The first
+build asks to create a signing key; accept the default. (With Android Studio installed you can build
+locally instead with `npx expo run:android`.)
+
+### Settings
+
+Copy `mobile/.env.example` to `mobile/.env`:
+
+- `EXPO_PUBLIC_API_BASE`: the backend. Defaults to the Render backend.
+- `EXPO_PUBLIC_SITE_URL`: your website's address. Family share links open there, so the **Share live
+  location with family** button only appears once this is set.
+
+Restart `npx expo start` after changing it, and rebuild the APK for it to reach the installed app.
+
+### Checks
+
+```
+cd mobile
+npx expo lint
+npx expo-doctor
 ```
 
 ## How tracking works
@@ -114,7 +162,7 @@ Timetable estimates are always labelled as not live and never show a delay.
 
 ### Cell tower mode
 
-Every 10 seconds, the Android app reads the towers it can see (`CellTowerPlugin.java`) and asks the
+Every 10 seconds, the Android app reads the towers it can see (`mobile/modules/cell-towers`) and asks the
 backend where they are. The backend tries these in order:
 
 1. **Learned map:** when a rider in GPS mode opts in to sharing, their position counts towards the
@@ -134,9 +182,9 @@ on while tracking, and it needs to stay open for tracking and stop alerts to wor
 
 ## Data sources
 
-Feeds are listed in `backend/src/main/resources/application.yml`. Any GTFS zip can be added there
-with no code changes. They're re-downloaded every 24 hours, and the last good copy stays in use if a
-download fails.
+Feeds are listed in `backend/src/main/resources/application.properties`. Any GTFS zip can be added
+there with no code changes. They're re-downloaded every 24 hours, and the last good copy stays in use
+if a download fails.
 
 | Region | Operators | Source | Status |
 | --- | --- | --- | --- |
@@ -144,9 +192,32 @@ download fails.
 | Pune, Pimpri-Chinchwad | PMPML | [pmpml-gtfs](https://github.com/croyla/pmpml-gtfs), with [live positions](https://pmpml-rt.blrtransit.com/) | Unofficial. Live feed isn't exhaustive and its address may change |
 | Maharashtra | MSRTC | [msrtc-gtfs](https://github.com/croyla/msrtc-gtfs) | Unofficial, incomplete, no licence stated |
 | Telangana | TGSRTC | [Open Data Telangana](https://data.telangana.gov.in/), via OpenCity | Government data. Times are repaired, see below |
+| Pune Metro | Purple, Aqua and Pink lines | [OpenStreetMap](https://www.openstreetmap.org/relation/13917129), built into the app | Community data (ODbL). See below |
+
 Maharashtra's operators don't publish open timetable data that we could find, so its feeds are
 community-built. Check each source's terms, and ideally ask the operators, before launching publicly.
 MSRTC in particular has no stated licence.
+
+### Pune Metro
+
+Pune Metro publishes no timetable data, so `tools/pune-metro/build-gtfs.mjs` builds a GTFS feed from
+OpenStreetMap, where each line's stations are mapped in order. It's saved in
+`backend/src/main/resources/feeds/pune-metro.zip` and ships with the app. To pick up changes in
+OpenStreetMap, such as new stations or platform numbers, run `node tools/pune-metro/build-gtfs.mjs` and
+redeploy.
+
+- **Purple and Aqua lines:** departures follow the service hours, frequency (closer together at peak
+  times) and end-to-end journey time mapped there. Times between stations divide that journey time by
+  distance, as no per-station times are published.
+- **Pink Line:** OpenStreetMap has no timings for it yet, so the converter uses the official timetable
+  as reported at opening (every 5 min 30 s at peak, 10 min otherwise, 06:00 to 22:30 from Maan and 23:40
+  from District Court, 45 minutes end to end). See `PUBLISHED` in the script for the sources.
+- **No timings anywhere:** a line gets no timetable. The app still lists its stations and tracks it live
+  from riders' phones.
+- **Platforms:** numbers show where mappers have added them (a stop position's `ref`). As of November
+  2026 that's only District Court on the Aqua Line.
+
+The data is © OpenStreetMap contributors under the Open Database Licence, which the app credits.
 
 ### Repaired timings
 

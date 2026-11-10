@@ -2,15 +2,20 @@ import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { canReadTowers, readCells } from '../lib/cells.js'
 import { track } from '../lib/usage.js'
+import { useStopAlarm } from '../lib/alarm.js'
+import { useFamilyShare } from '../lib/familyShare.js'
 import { useData, usePhonePosition, useTick, useWakeLock } from '../lib/hooks.js'
 import { assignBuses, atRouteEnd, defaultDeparture, describeJourney } from '../lib/journey.js'
 import { formatAge, formatClock, formatDuration, formatKm, secondsNow } from '../lib/time.js'
 import { nearestDeparture } from '../lib/tracker.js'
+import { isMetro, lineColours, wordsFor } from '../lib/words.js'
 import DeparturePicker from './DeparturePicker.jsx'
 import FeedNotice from './FeedNotice.jsx'
 import LiveBuses from './LiveBuses.jsx'
-import Timeline from './Timeline.jsx'
-import { ErrorMessage, Message, NumberPlate, ReloadIcon } from './ui.jsx'
+import { FamilyShareControl } from './FamilyShare.jsx'
+import JourneyView from './JourneyView.jsx'
+import { AlarmBanner, AlarmNote } from './StopAlarm.jsx'
+import { ErrorMessage, Message, ReloadIcon, ServicePlate } from './ui.jsx'
 
 const LIVE_POLL_MS = 15_000
 // A live bus moving back along the route by more than this has started a new run, not wobbled.
@@ -20,12 +25,16 @@ const RESTART_KM = 1
 const MAX_BUS_KMH = 80
 const JUMP_ALLOWANCE_KM = 0.5
 const SHARE_EVERY_MS = 15_000
-const ALARM_KM = 1
-const ALARM_SECONDS = 180
 // A random ID for this visit only, so one rider's reports count once.
 const RIDER_ID = globalThis.crypto?.randomUUID?.() ?? null
 
-const NOT_ON_BUS_HINT = "Showing where the bus is from its GPS or riders on board if available, otherwise it's estimated from the timetable."
+/** What the page uses when the rider isn't tracking from their own phone. */
+function notOnBusHint(feed, words, timetabled) {
+  const sources = feed?.hasLiveBuses ? 'its GPS or riders on board' : 'riders on board'
+  const otherwise = timetabled ? "otherwise it's estimated from the timetable" : "otherwise its position isn't known, as this line has no timetable yet"
+  return `Showing where the ${words.bus} is from ${sources} if available, ${otherwise}.`
+}
+
 const TRACKING_OPTIONS = [
   {
     id: 'cell',
@@ -60,13 +69,16 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
   }, [feedId, openedNumber])
 
   const nowSec = secondsNow(service?.timezone ?? 'Asia/Kolkata')
+  const words = wordsFor(feed)
+  const metro = isMetro(feed)
+  // A line with no published timetable still has stations and can be tracked live, but has no departures.
+  const timetabled = service?.timetabled !== false
 
   // When a rider starts tracking, work out which departure they're on, unless they've picked one.
   const { position, method, error: locationError, tooVague, accuracy, fixRef } = usePhonePosition(service?.stops, mode, usualSpeed(service), (km) => {
     const match = nearestDeparture(service.departures, service.km, km, nowSec)
     if (match) setMatchedTripId(match.departure.tripId)
   })
-  useWakeLock(mode !== 'off')
 
   const { buses, passings, checked: liveChecked } = useLiveBuses(feedId, serviceId, refreshCount, service)
   // Where buses report GPS, wait for the first answer before drawing the journey. Otherwise the
@@ -81,7 +93,7 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
   const running = service ? buses.filter((b) => !atRouteEnd(b, service.km)) : []
   const autoBus = mode === 'off' && !pickedTripId && !followedPlate && running.length > 0 ? running.reduce((a, b) => (b.km > a.km ? b : a)) : null
   const autoBusTrip = autoBus ? nearestDeparture(service.departures, service.km, autoBus.km, nowSec, Infinity)?.departure.tripId : null
-  const tripId = pickedTripId ?? (mode !== 'off' ? matchedTripId : null) ?? autoBusTrip ?? fallback?.tripId ?? null
+  const tripId = pickedTripId ?? (mode !== 'off' ? matchedTripId : null) ?? autoBusTrip ?? fallback?.tripId ?? service?.untimedTripId ?? null
   const { data: trip, error: tripError, retry: retryTrip, refreshing: tripRefreshing } = useData(tripId && `trip|${feedId}|${tripId}`, (signal) => api.trip(feedId, tripId, signal), { cacheMs: CACHE_TIMETABLE_MS })
 
   const live = useLivePolling(feedId, tripId, mode, refreshCount)
@@ -93,10 +105,14 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
   const bus = followed ?? autoBus ?? assigned.get(tripId) ?? null
   const journey =
     service && trip?.tripId === tripId
-      ? describeJourney({ stops: service.stops, trip, nowSec, phoneKm, bus, live, mode })
+      ? describeJourney({ stops: service.stops, trip, nowSec, phoneKm, bus, live, mode, timetabled })
       : null
 
-  const { alarm, firing, toggle: toggleAlarm, dismiss: dismissAlarm } = useStopAlarm(service?.stops, journey, nowSec)
+  const stopAlarm = useStopAlarm(service?.stops, journey)
+  const { alarm, firing } = stopAlarm
+  const family = useFamilyShare({ feedId, tripId, tracking: mode !== 'off', fixRef, source: mode === 'gps' ? 'gps' : 'cell' })
+  // Browsers pause pages once the screen locks, which would stop tracking, the alarm and sharing.
+  useWakeLock(mode !== 'off' || alarm != null || family.share != null)
 
   const refresh = () => {
     retryService()
@@ -108,7 +124,7 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
     return (
       <>
         <TopBar />
-        <ErrorMessage title="We couldn't open this bus" error={serviceError} onRetry={retryService} />
+        <ErrorMessage title={`We couldn't open this ${words.bus}`} error={serviceError} onRetry={retryService} />
       </>
     )
   }
@@ -116,17 +132,18 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
     return (
       <>
         <TopBar />
-        <Message title="Loading bus…" />
+        <Message title={`Loading ${words.bus}…`} />
       </>
     )
   }
 
   return (
-    <>
+    // Metro screens take the line's colour (purple, aqua or pink) in place of the usual orange.
+    <div style={metro ? lineColours(service.color) : undefined}>
       <div className="sticky top-0 z-30 shadow-md">
         <TopBar>
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            {feed && !feed.numbersAreCodes && <NumberPlate number={service.number} large />}
+            {feed && !feed.numbersAreCodes && <ServicePlate metro={metro} service={service} large />}
             <div className="min-w-0 text-sm leading-tight">
               <div className="truncate font-semibold">{service.to}</div>
               <div className="truncate text-xs text-paper/70">
@@ -138,10 +155,13 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
           </div>
         </TopBar>
         <TrackingControls
+          words={words}
           onBus={onBus}
           trackBy={trackBy}
           onChangeOnBus={(next) => {
             setOnBus(next)
+            // Getting off ends the family link, so it never shows a bus the rider has left.
+            if (!next) family.stop()
             // Asked again each time, because the better choice depends on the phone's signal now.
             setTrackBy(null)
           }}
@@ -154,26 +174,19 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
 
       {(!onBus || trackBy) && (
         <p className="border-b border-line bg-card px-4 py-2 text-xs text-ink-soft">
-          {onBus ? TRACKING_OPTIONS.find((o) => o.id === trackBy).hint : NOT_ON_BUS_HINT}
+          {onBus ? TRACKING_OPTIONS.find((o) => o.id === trackBy).hint : notOnBusHint(feed, words, timetabled)}
         </p>
       )}
 
-      {service.departures.length === 0 ? (
-        <Message title="No departures listed today">This feed doesn't show this bus running today.</Message>
+      {timetabled && service.departures.length === 0 ? (
+        <Message title="No departures listed today">{`This feed doesn't show this ${words.bus} running today.`}</Message>
       ) : (
         // The bottom padding keeps the last stop and its alert bell clear of the refresh button.
         <main className="pb-48">
-          {firing && (
-            <div role="alert" className="flex items-center gap-3 bg-late px-4 py-3 font-semibold text-white">
-              <p className="flex-1">{service.stops[alarm].name} is coming up. Get ready!</p>
-              <button onClick={dismissAlarm} className="rounded-md bg-white/20 px-3 py-1.5 text-sm">
-                OK
-              </button>
-            </div>
-          )}
+          {firing && <AlarmBanner stop={service.stops[alarm]} onDismiss={stopAlarm.dismiss} />}
 
-          <LocationStatus mode={mode} error={locationError} tooVague={tooVague} accuracy={accuracy} position={position} />
-          {journey && !waitingForLive && <StatusCard service={service} journey={journey} live={live} bus={bus} method={method} accuracy={accuracy} nowSec={nowSec} />}
+          <LocationStatus mode={mode} error={locationError} tooVague={tooVague} accuracy={accuracy} position={position} words={words} />
+          {journey && !waitingForLive && <StatusCard service={service} journey={journey} bus={bus} method={method} accuracy={accuracy} nowSec={nowSec} words={words} />}
 
           {/* Community timetables often stop well before the real last bus, so don't imply service has ended. */}
           {journey && !bus && journey.source === 'timetable' && journey.phase === 'finished' && (
@@ -181,11 +194,12 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
               {buses.length > 0
                 ? `Today's timetable has ended, but ${buses.length} live ${buses.length === 1 ? 'bus is' : 'buses are'} running now — see the list below.`
                 : feed && !feed.official
-                  ? 'This is the last trip in our timetable. The data can be incomplete, so real buses may run later than shown.'
+                  ? `This is the last trip in our timetable. The data can be incomplete, so real ${words.buses} may run later than shown.`
                   : null}
             </p>
           )}
 
+          {timetabled && (
           <DeparturePicker
             departures={service.departures}
             selectedId={tripId}
@@ -196,6 +210,7 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
               setFollowedPlate(null)
             }}
           />
+          )}
           <LiveBuses
             buses={buses}
             stops={service.stops}
@@ -207,37 +222,50 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
             }}
           />
 
+          {(mode !== 'off' || family.share) && <FamilyShareControl family={family} destination={service.to} words={words} />}
+
           {mode !== 'off' && (
             <label className="flex items-start gap-3 border-b border-line px-4 py-3 text-sm">
               <input type="checkbox" checked={sharing} onChange={(e) => setSharing(e.target.checked)} className="mt-0.5 size-5 accent-ink" />
               <span>
-                <span className="font-semibold">Help others waiting for this bus</span>
+                <span className="font-semibold">Help others waiting for this {words.bus}</span>
                 <span className="block text-xs text-ink-soft">
                   {canReadTowers()
-                    ? "Anonymously shares how far along the route the bus is, and helps map cell towers, only while this is on. Nothing is tied to you."
-                    : "Anonymously shares how far along the route the bus is, only while this is on. Your exact location isn't stored."}
+                    ? `Anonymously shares how far along the route the ${words.bus} is, and helps map cell towers, only while this is on. Nothing is tied to you.`
+                    : `Anonymously shares how far along the route the ${words.bus} is, only while this is on. Your exact location isn't stored.`}
                 </span>
               </span>
             </label>
           )}
 
           {tripError && !journey && <ErrorMessage title="We couldn't load this departure" error={tripError} onRetry={retryTrip} />}
-          {!journey && !tripError && <Message title="Loading stops…" />}
+          {!journey && !tripError && <Message title={`Loading ${words.stops}…`} />}
           {journey && waitingForLive && <Message title="Looking for live buses…" />}
           {journey && !waitingForLive && (
             <div className="pt-1">
               {alarm != null && !firing && (
-                <p className="mx-4 mt-2 rounded-xl bg-tint px-3 py-2 text-xs">
-                  We'll alert you before <span className="font-semibold">{service.stops[alarm].name}</span>. Keep this page open.
-                </p>
+                <AlarmNote
+                  stop={service.stops[alarm]}
+                  alarmKm={stopAlarm.alarmKm}
+                  onChangeKm={stopAlarm.setAlarmKm}
+                  remainingKm={stopAlarm.remainingKm}
+                  estimated={journey.source === 'timetable'}
+                  estimateHint={
+                    timetabled
+                      ? `This uses the timetable, so it may ring early or late. Turn on “I'm on this ${words.bus}” to ring from where you really are.`
+                      : `This line has no timetable, so the alarm can only ring once you turn on “I'm on this ${words.bus}”.`
+                  }
+                />
               )}
-              <Timeline
+              <JourneyView
+                stopsLabel={words.Stops}
+                lineColor={metro ? service.color : null}
                 stops={service.stops}
                 trip={trip}
                 journey={journey}
                 passedAt={(bus && passings[bus.plate]) || {}}
                 alarmIndex={alarm}
-                onToggleAlarm={toggleAlarm}
+                onToggleAlarm={stopAlarm.toggle}
               />
             </div>
           )}
@@ -250,8 +278,8 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
         </main>
       )}
 
-      <RefreshButton onClick={refresh} refreshing={serviceRefreshing || tripRefreshing} />
-    </>
+      <RefreshButton words={words} onClick={refresh} refreshing={serviceRefreshing || tripRefreshing} />
+    </div>
   )
 }
 
@@ -273,12 +301,12 @@ function TopBar({ children }) {
 }
 
 /** Floats at the bottom right of the app's column, which is centred on wide screens. */
-function RefreshButton({ onClick, refreshing }) {
+function RefreshButton({ words, onClick, refreshing }) {
   return (
     <button
       onClick={onClick}
       disabled={refreshing}
-      aria-label="Refresh this bus"
+      aria-label={`Refresh this ${words.bus}`}
       title="Refresh"
       className="fixed right-[max(1.25rem,calc((100vw-36rem)/2+1.25rem))] bottom-[calc(2.5rem+env(safe-area-inset-bottom))] z-20 flex size-14 items-center justify-center rounded-full bg-ink text-paper shadow-lg"
     >
@@ -288,12 +316,12 @@ function RefreshButton({ onClick, refreshing }) {
 }
 
 /** "Are you on this bus?", then how to track it. Location is only used once both are answered. */
-function TrackingControls({ onBus, trackBy, onChangeOnBus, onChangeTrackBy }) {
+function TrackingControls({ words, onBus, trackBy, onChangeOnBus, onChangeTrackBy }) {
   return (
     <div className="bg-card px-4 py-2.5">
       <div className="flex items-center justify-between gap-3">
         <span id="on-bus-label" className="font-semibold">
-          I'm on this bus
+          I'm on this {words.bus}
         </span>
         <button
           role="switch"
@@ -308,8 +336,8 @@ function TrackingControls({ onBus, trackBy, onChangeOnBus, onChangeTrackBy }) {
 
       {onBus && (
         <div className="mt-2.5">
-          {!trackBy && <p className="mb-1.5 text-sm text-ink-soft">How should we track your bus?</p>}
-          <div role="radiogroup" aria-label="How to track your bus" className="grid grid-cols-2 gap-2">
+          {!trackBy && <p className="mb-1.5 text-sm text-ink-soft">How should we track your {words.bus}?</p>}
+          <div role="radiogroup" aria-label={`How to track your ${words.bus}`} className="grid grid-cols-2 gap-2">
             {TRACKING_OPTIONS.map((o) => (
               <button
                 key={o.id}
@@ -330,7 +358,7 @@ function TrackingControls({ onBus, trackBy, onChangeOnBus, onChangeTrackBy }) {
 }
 
 /** Explains why the phone's location isn't being used, when it isn't. */
-function LocationStatus({ mode, error, tooVague, accuracy, position }) {
+function LocationStatus({ mode, error, tooVague, accuracy, position, words }) {
   if (mode === 'off') return null
 
   let message = null
@@ -346,14 +374,14 @@ function LocationStatus({ mode, error, tooVague, accuracy, position }) {
   } else if (tooVague) {
     message = `This position is only accurate to about ${Math.round(accuracy / 1000)} km, which is too vague to use. Try GPS.`
   } else if (position && !position.onRoute) {
-    message = `You're about ${formatKm(position.offRouteKm)} from this route, so we're not using your location. Are you on this bus?`
+    message = `You're about ${formatKm(position.offRouteKm)} from this route, so we're not using your location. Are you on this ${words.bus}?`
   } else if (!position && !error) {
     message = 'Finding your location…'
   }
   return message && <p className="border-b border-line bg-tint px-4 py-2.5 text-sm">{message}</p>
 }
 
-function StatusCard({ service, journey, live, bus, method, accuracy, nowSec }) {
+function StatusCard({ service, journey, bus, method, accuracy, nowSec, words }) {
   const { phase, source, last, delaySec, eta, startsInSec } = journey
   const stops = service.stops
   const next = stops[last + 1]
@@ -362,7 +390,10 @@ function StatusCard({ service, journey, live, bus, method, accuracy, nowSec }) {
 
   let headline
   let detail
-  if (phase === 'not-started') {
+  if (phase === 'unknown') {
+    headline = 'No timetable published for this line yet'
+    detail = `Turn on “I'm on this ${words.bus}” to track it from your phone.`
+  } else if (phase === 'not-started') {
     headline = `Departs in ${formatDuration(startsInSec / 60)}`
     detail = `From ${stops[0].name} at ${formatClock(eta[0])}`
   } else if (phase === 'finished') {
@@ -386,9 +417,9 @@ function StatusCard({ service, journey, live, bus, method, accuracy, nowSec }) {
         </div>
         {delaySec != null && phase === 'running' && <DelayChip sec={delaySec} />}
       </div>
-      <SourceBadge source={source} live={live} bus={bus} method={method} accuracy={accuracy} />
+      <SourceBadge source={source} bus={bus} method={method} accuracy={accuracy} words={words} />
       {journey.offSchedule && (
-        <p className="mt-1 text-xs text-ink-soft">Times use the bus's live position and this route's usual travel times.</p>
+        <p className="mt-1 text-xs text-ink-soft">Times use the {words.bus}'s live position and this route's usual travel times.</p>
       )}
     </section>
   )
@@ -409,8 +440,12 @@ function formatAccuracy(metres) {
   return metres < 1000 ? `${Math.round(metres / 10) * 10 || 10} m` : `${(metres / 1000).toFixed(1)} km`
 }
 
-function SourceBadge({ source, live, bus, method, accuracy }) {
-  const isLive = source !== 'timetable'
+/**
+ * Says where a live position comes from. Nothing shows for a timetable estimate, and riders' positions
+ * never say how many people are sharing.
+ */
+function SourceBadge({ source, bus, method, accuracy, words }) {
+  if (source === 'timetable') return null
   const text = {
     gps: "Live from your phone's GPS",
     cell:
@@ -420,13 +455,12 @@ function SourceBadge({ source, live, bus, method, accuracy }) {
           ? "Live from network location, as these towers aren't mapped yet"
           : 'Live from network location, approximate',
     bus: `Live from bus GPS · ${bus?.plate} · ${formatAge(bus?.ageSec ?? 0)}`,
-    riders: `Live from ${live?.riders} ${live?.riders === 1 ? 'rider' : 'riders'} on this bus`,
-    timetable: 'Estimate from the timetable, not live. Nobody on this bus is sharing yet.',
+    riders: `Live from riders on this ${words.bus}`,
   }[source]
   return (
     <p className="mt-2 flex items-center gap-1.5 text-xs font-medium">
-      <span className={`size-2 shrink-0 rounded-full ${isLive ? 'live-dot bg-ontime' : 'bg-ink-soft/50'}`} />
-      <span className={isLive ? 'text-ontime' : 'text-ink-soft'}>
+      <span className="live-dot size-2 shrink-0 rounded-full bg-ontime" />
+      <span className="text-ontime">
         {text}
         {(source === 'gps' || source === 'cell') && accuracy != null && ` (to about ${formatAccuracy(accuracy)})`}
       </span>
@@ -539,53 +573,4 @@ function useSharing({ feedId, tripId, mode, enabled, fixRef }) {
     const id = setInterval(send, SHARE_EVERY_MS)
     return () => clearInterval(id)
   }, [enabled, mode, tripId, feedId, fixRef])
-}
-
-/**
- * Alerts when the bus nears a chosen stop, until dismissed. Sound needs a tap to allow it, which
- * choosing the stop provides.
- *
- * @returns {alarm, firing, toggle, dismiss}
- */
-function useStopAlarm(stops, journey, nowSec) {
-  const [alarm, setAlarm] = useState(null)
-  const audio = useRef(null)
-
-  const toggle = (index) => {
-    setAlarm(alarm === index ? null : index)
-    if (!audio.current) {
-      const Context = window.AudioContext ?? window.webkitAudioContext
-      if (Context) audio.current = new Context()
-    }
-    audio.current?.resume()
-  }
-
-  const firing =
-    alarm != null &&
-    journey != null &&
-    journey.phase !== 'not-started' &&
-    (alarm <= journey.last ||
-      stops[alarm].km - journey.km <= ALARM_KM ||
-      journey.eta[alarm] - (journey.clock ?? nowSec) <= ALARM_SECONDS)
-
-  useEffect(() => {
-    if (firing) {
-      navigator.vibrate?.([400, 200, 400, 200, 400])
-      if (audio.current) beep(audio.current)
-    }
-  }, [firing])
-
-  return { alarm, firing, toggle, dismiss: () => setAlarm(null) }
-}
-
-function beep(context) {
-  ;[0, 0.45, 0.9].forEach((delay) => {
-    const oscillator = context.createOscillator()
-    const gain = context.createGain()
-    oscillator.frequency.value = 880
-    gain.gain.value = 0.3
-    oscillator.connect(gain).connect(context.destination)
-    oscillator.start(context.currentTime + delay)
-    oscillator.stop(context.currentTime + delay + 0.3)
-  })
 }

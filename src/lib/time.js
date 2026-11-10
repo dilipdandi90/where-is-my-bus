@@ -43,3 +43,9 @@ export function formatAge(seconds) {
 export function formatKm(km) {
   return km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`
 }
+
+/** A distance still to go: metres (to the nearest 10) under 1 km, so the last stretch visibly counts down. */
+export function formatDistance(km) {
+  const metres = Math.max(0, Math.round((km * 1000) / 10) * 10)
+  return metres < 1000 ? `${metres} m` : formatKm(metres / 1000)
+}

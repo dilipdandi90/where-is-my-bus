@@ -1,17 +1,37 @@
 // Longer than this and the large size would crowd out the route beside it.
 const LONG_NUMBER = 7
 
-/** A bus number is what people look for, so it's never cut off. A very long one wraps instead. */
-export function NumberPlate({ number, large = false }) {
+/**
+ * A bus number is what people look for, so it's never cut off. A very long one wraps instead.
+ *
+ * @param color a metro line's colour (hex digits), which then fills the plate, with textColor on it
+ */
+export function NumberPlate({ number, large = false, color, textColor }) {
   return (
     <span
       className={`inline-block max-w-[55%] shrink-0 rounded-lg bg-road px-2.5 py-0.5 leading-tight font-extrabold tracking-tight wrap-anywhere text-ink ${
         large && number.length <= LONG_NUMBER ? 'text-2xl' : 'text-base'
       }`}
+      style={color ? { background: `#${color}`, color: `#${textColor || 'FFFFFF'}` } : undefined}
     >
       {number}
     </span>
   )
+}
+
+/** The plate for a service: its bus number, or for a metro line "Line 1" in the line's colour. */
+export function ServicePlate({ metro, service, large = false }) {
+  return metro ? (
+    <NumberPlate number={`Line ${service.number}`} large={large} color={service.color} textColor={service.textColor} />
+  ) : (
+    <NumberPlate number={service.number} large={large} />
+  )
+}
+
+/** A station's platform, where the feed gives one. */
+export function PlatformChip({ platform }) {
+  if (!platform) return null
+  return <span className="ml-1.5 inline-block rounded border border-ink-soft/40 px-1 text-[10px] leading-4 font-bold text-ink-soft">PF {platform}</span>
 }
 
 export function Message({ title, children }) {
@@ -42,6 +62,17 @@ export function BusIcon({ className = 'size-5' }) {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
       <path d="M5 4a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v14a2 2 0 0 1-1 1.73V21a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H9v1a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-1.27A2 2 0 0 1 5 18V4Zm2 2v6h10V6H7Zm1.5 11a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm7 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+    </svg>
+  )
+}
+
+// Material Icons "train" (Apache 2.0). Shared with the route map, which draws markers outside React.
+export const TRAIN_PATH = 'M12 2c-4 0-8 .5-8 4v9.5C4 17.43 5.57 19 7.5 19L6 20.5v.5h2.23l2-2H14l2 2h2v-.5L16.5 19c1.93 0 3.5-1.57 3.5-3.5V6c0-3.5-3.58-4-8-4zM7.5 17c-.83 0-1.5-.67-1.5-1.5S6.67 14 7.5 14s1.5.67 1.5 1.5S8.33 17 7.5 17zm3.5-7H6V6h5v4zm2 0V6h5v4h-5zm3.5 7c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z'
+
+export function TrainIcon({ className = 'size-5' }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d={TRAIN_PATH} />
     </svg>
   )
 }

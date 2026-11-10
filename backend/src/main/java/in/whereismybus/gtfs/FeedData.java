@@ -19,8 +19,11 @@ public record FeedData(
         List<Stop> stops,
         Map<String, StopName> stopNames) {
 
-    /** @param key the name reduced by {@link GtfsLoader#normalize} for matching */
-    public record Stop(String id, String name, String key, double lat, double lon) {}
+    /**
+     * @param key the name reduced by {@link GtfsLoader#normalize} for matching
+     * @param platform the platform number where the feed gives one (GTFS platform_code), otherwise empty
+     */
+    public record Stop(String id, String name, String key, double lat, double lon, String platform) {}
 
     /** All stops sharing a name, such as the two sides of a road. */
     public record StopName(String name, double lat, double lon) {}
@@ -38,11 +41,19 @@ public record FeedData(
         public final List<Trip> trips;
         /** The feed's route IDs for this service, which live positions refer to. */
         public final Set<String> routeIds;
+        /** The line's colour as six hex digits, and the text colour that reads on it. Empty if the feed gives none. */
+        public final String color;
+        public final String textColor;
+        /**
+         * False when no timetable is published (a line just opened, say). Its one trip never runs; it
+         * holds the stop order and is the trip riders track and share live.
+         */
+        public final boolean timetabled;
         final String numberKey;
         final String nameKey;
 
         public Service(String id, String number, String operator, String label, List<Stop> stops, double[] km,
-                       List<Trip> trips, Set<String> routeIds) {
+                       List<Trip> trips, Set<String> routeIds, String color, String textColor) {
             this.id = id;
             this.number = number;
             this.operator = operator;
@@ -53,6 +64,9 @@ public record FeedData(
             this.km = km;
             this.trips = trips;
             this.routeIds = routeIds;
+            this.color = color;
+            this.textColor = textColor;
+            this.timetabled = trips.stream().anyMatch(t -> t.weekdayMask() != 0);
             this.numberKey = GtfsLoader.normalize(number);
             this.nameKey = GtfsLoader.normalize(from() + "|" + to() + "|" + label);
         }

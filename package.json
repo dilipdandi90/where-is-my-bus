@@ -6,20 +6,17 @@
   "scripts": {
     "dev": "vite",
     "dev:phone": "vite --mode phone",
-    "android": "vite build && cap sync android && cap open android",
     "build": "vite build",
     "lint": "eslint .",
     "test": "node --test src/lib/",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@capacitor/core": "^7.6.10",
+    "leaflet": "^1.9.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
-    "@capacitor/android": "^7.6.10",
-    "@capacitor/cli": "^7.6.10",
     "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.3.5",
     "@types/react": "^19.3.0",

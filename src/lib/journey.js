@@ -13,8 +13,10 @@ const SCHEDULE_SLACK_SEC = 45 * 60
  * @param phoneKm the phone's km along the route if it's on the route, otherwise null
  * @param bus the live bus believed to be running this trip, or null
  * @param live the latest rider status from the server, or null
+ * @param timetabled false for a line with no published timetable. Then only a live position places the
+ *        train, there are no times, and without one the phase is 'unknown'.
  */
-export function describeJourney({ stops, trip, nowSec, phoneKm, bus, live, mode }) {
+export function describeJourney({ stops, trip, nowSec, phoneKm, bus, live, mode, timetabled = true }) {
   const { offsets, startSec } = trip
   const duration = offsets[offsets.length - 1]
   const clock = clockForTrip(nowSec, startSec, duration)
@@ -31,6 +33,13 @@ export function describeJourney({ stops, trip, nowSec, phoneKm, bus, live, mode 
   } else if (live?.riders > 0 && live.km != null) {
     source = 'riders'
     km = live.km
+  }
+
+  if (!timetabled) {
+    const noTimes = stops.map(() => null)
+    if (source === 'timetable') return { phase: 'unknown', source, km: 0, last: -1, delaySec: null, eta: noTimes, untimed: true }
+    const last = lastStopIndex(stops, km)
+    return { phase: last === stops.length - 1 ? 'finished' : 'running', source, km, last, delaySec: null, eta: noTimes, untimed: true }
   }
 
   if (source === 'timetable') {
@@ -109,4 +118,34 @@ export function defaultDeparture(departures, nowSec) {
     if (next == null && d.startSec > nowSec) next = d
   }
   return running ?? next ?? departures[departures.length - 1] ?? null
+}
+
+// Within this of a stop, the bus counts as at it.
+export const AT_STOP_KM = 0.05
+
+/**
+ * What to say beside the bus: how far it is to the next stop and that stop's name, or the stop it's
+ * standing at. distanceKm is null when the bus is at a stop or past the last one.
+ */
+export function nextStopInfo(stops, km, last) {
+  const here = stops[Math.max(0, last)]
+  if (last >= 0 && km - here.km < AT_STOP_KM) return { index: Math.max(0, last), name: here.name, distanceKm: null }
+  const next = stops[last + 1]
+  if (!next) return { index: last, name: here.name, distanceKm: null }
+  return { index: last + 1, name: next.name, distanceKm: Math.max(0, next.km - km) }
+}
+
+/** The map position km along the route, on the straight line between the stops either side. */
+export function pointAtKm(stops, km) {
+  if (km <= stops[0].km) return [stops[0].lat, stops[0].lon]
+  for (let i = 0; i + 1 < stops.length; i++) {
+    const a = stops[i]
+    const b = stops[i + 1]
+    if (km <= b.km) {
+      const t = b.km > a.km ? (km - a.km) / (b.km - a.km) : 0
+      return [a.lat + t * (b.lat - a.lat), a.lon + t * (b.lon - a.lon)]
+    }
+  }
+  const end = stops[stops.length - 1]
+  return [end.lat, end.lon]
 }

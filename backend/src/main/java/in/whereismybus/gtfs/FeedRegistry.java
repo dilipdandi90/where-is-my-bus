@@ -72,6 +72,10 @@ public class FeedRegistry {
 
     /** The cached file's size, or else the size the server reports, without downloading the file. */
     private long sizeOf(FeedProperties.Feed feed) {
+        if (feed.builtIn()) {
+            // Tiny and already here, so it loads first.
+            return 0;
+        }
         try {
             return Files.size(zipPath(feed));
         } catch (IOException ignored) {
@@ -97,7 +101,9 @@ public class FeedRegistry {
     @Scheduled(fixedDelayString = "PT5M", initialDelayString = "PT5M")
     void refreshDue() {
         for (var feed : props.feeds()) {
-            if (entries.get(feed.id()).status() == Status.FAILED || isStale(zipPath(feed))) {
+            // A built-in feed only changes with a new version of the app, which loads it on startup.
+            boolean due = !feed.builtIn() && isStale(zipPath(feed));
+            if (entries.get(feed.id()).status() == Status.FAILED || due) {
                 refresh(feed);
             }
         }
@@ -124,11 +130,14 @@ public class FeedRegistry {
     private void loadLatest(FeedProperties.Feed feed) {
         Path zip = zipPath(feed);
         Entry current = entries.get(feed.id());
-        if (current.data() != null && !isStale(zip)) {
+        if (current.data() != null && (feed.builtIn() || !isStale(zip))) {
             return;
         }
         try {
-            if (isStale(zip)) {
+            if (feed.builtIn()) {
+                // Copied fresh each start, so a new version of the app never reads an old copy.
+                copyBuiltIn(feed, zip);
+            } else if (isStale(zip)) {
                 try {
                     download(feed, zip);
                 } catch (IOException e) {
@@ -150,6 +159,17 @@ public class FeedRegistry {
             if (old == null || old.data() == null) {
                 entries.put(feed.id(), new Entry(feed, Status.FAILED, null, e.getMessage()));
             }
+        }
+    }
+
+    private static void copyBuiltIn(FeedProperties.Feed feed, Path zip) throws IOException {
+        String resource = feed.url().substring("classpath:".length());
+        try (var in = FeedRegistry.class.getClassLoader().getResourceAsStream(resource)) {
+            if (in == null) {
+                throw new IOException("Missing built-in feed " + resource);
+            }
+            Files.createDirectories(zip.getParent());
+            Files.copy(in, zip, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 

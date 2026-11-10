@@ -138,10 +138,57 @@ class GtfsLoaderTest {
     }
 
     @Test
+    void metroLinesKeepTheirColourPlatformsAndLinesWithoutATimetable() throws IOException {
+        Path zip = zip(Map.of(
+                "stops.txt", """
+                        stop_id,stop_name,stop_lat,stop_lon,platform_code
+                        A,District Court,18.528,73.855,1
+                        B,Shivaji Nagar,18.531,73.849,
+                        C,Khadki,18.563,73.838,
+                        """,
+                "routes.txt", """
+                        route_id,agency_id,route_short_name,route_long_name,route_type,route_color,route_text_color
+                        1,PM,1,Purple Line,1,800080,FFFFFF
+                        3,PM,3,Pink Line,1,F91C91,FFFFFF
+                        """,
+                "calendar.txt", """
+                        service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+                        DAILY,1,1,1,1,1,1,1,20260101,20301231
+                        NO_TIMETABLE,0,0,0,0,0,0,0,20260101,20301231
+                        """,
+                "trips.txt", """
+                        route_id,service_id,trip_id,trip_headsign
+                        1,DAILY,p1,Purple Line
+                        3,NO_TIMETABLE,pink,Pink Line
+                        """,
+                "stop_times.txt", """
+                        trip_id,arrival_time,departure_time,stop_id,stop_sequence
+                        p1,06:00:00,06:00:00,A,0
+                        p1,06:03:00,06:03:00,B,1
+                        pink,00:00:00,00:00:00,B,0
+                        pink,00:00:00,00:00:00,C,1
+                        """));
+
+        FeedData feed = GtfsLoader.load(zip, NumberRule.ROUTE_NAME);
+        var purple = feed.services().stream().filter(s -> s.number.equals("1")).findFirst().orElseThrow();
+        var pink = feed.services().stream().filter(s -> s.number.equals("3")).findFirst().orElseThrow();
+
+        assertEquals("800080", purple.color);
+        assertEquals("1", purple.stops.getFirst().platform());
+        assertEquals("", purple.stops.getLast().platform());
+        assertTrue(purple.timetabled);
+        assertFalse(pink.timetabled);
+        // Searching between its stations still finds the line, marked as having no times.
+        var found = Connections.find(feed, "Shivaji Nagar", "Khadki", 1, 0, Connections.WALKABLE_KM);
+        assertEquals(1, found.size());
+        assertTrue(found.getFirst().untimed());
+    }
+
+    @Test
     void searchRanksExactNumberAboveLooserMatches() {
-        var stops = List.of(new FeedData.Stop("a", "Colaba", "colaba", 18.9, 72.8),
-                new FeedData.Stop("b", "Bandra", "bandra", 19.0, 72.8));
-        var service = new FeedData.Service("id", "A-21/219", "BEST", "Colaba", stops, new double[] {0, 10}, List.of(), java.util.Set.of());
+        var stops = List.of(new FeedData.Stop("a", "Colaba", "colaba", 18.9, 72.8, ""),
+                new FeedData.Stop("b", "Bandra", "bandra", 19.0, 72.8, ""));
+        var service = new FeedData.Service("id", "A-21/219", "BEST", "Colaba", stops, new double[] {0, 10}, List.of(), java.util.Set.of(), "", "");
         assertEquals(0, service.searchRank("a21219"));
         assertEquals(1, service.searchRank("a21"));
         assertEquals(2, service.searchRank("a2"));

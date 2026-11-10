@@ -1,14 +1,13 @@
-import { Capacitor, registerPlugin } from '@capacitor/core'
 import { api } from './api.js'
 
-const CellTower = registerPlugin('CellTower')
-
-/** Only the Android app can read towers. Browsers don't expose them to web pages. */
-export const canReadTowers = () => Capacitor.isNativePlatform()
+/**
+ * Browsers never expose nearby cell towers to web pages, so the website uses the phone's network
+ * location instead. The mobile app (mobile/) reads towers directly.
+ */
+export const canReadTowers = () => false
 
 export async function readCells() {
-  const { cells } = await CellTower.getCells()
-  return cells
+  throw new Error("Browsers can't read cell towers")
 }
 
 // Earlier answers, so towers already seen on this journey still work if the network drops.

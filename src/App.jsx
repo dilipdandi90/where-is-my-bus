@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import BusScreen from './components/BusScreen.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
+import FamilyScreen from './components/FamilyScreen.jsx'
 import Home from './components/Home.jsx'
 import Insights from './components/Insights.jsx'
 import UsageConsent from './components/UsageConsent.jsx'
@@ -28,6 +29,9 @@ function saveFeeds(list) {
 
 function parseHash() {
   if (window.location.hash === '#/insights') return { insights: true }
+  // A link a rider sent to family. See FamilyShare.
+  const shared = window.location.hash.match(/^#\/f\/([A-Za-z0-9_-]+)$/)
+  if (shared) return { shareToken: shared[1] }
   const [, feedId, kind, serviceId, trip] = window.location.hash.split('/')
   // The trip is there when a particular departure was tapped, as in the between-stops timetable.
   return kind === 'bus' && serviceId ? { feedId, serviceId, tripId: trip ? decodeURIComponent(trip) : null } : null
@@ -87,9 +91,11 @@ export default function App() {
       <ErrorBoundary>
         {/* Keyed per screen so each one fades in. Opacity only: a transform here would pin the
             fixed refresh button to this box instead of the window while it animated. */}
-        <div key={route?.insights ? 'insights' : (route ? `${route.serviceId}/${route.tripId ?? ''}` : 'home')} className="screen-fade">
+        <div key={route?.insights ? 'insights' : route?.shareToken ? `f/${route.shareToken}` : route ? `${route.serviceId}/${route.tripId ?? ''}` : 'home'} className="screen-fade">
           {route?.insights ? (
             <Insights />
+          ) : route?.shareToken ? (
+            <FamilyScreen token={route.shareToken} feeds={feeds} />
           ) : route ? (
             <BusScreen feedId={route.feedId} feed={feed} serviceId={route.serviceId} initialTripId={route.tripId} />
           ) : (
@@ -97,7 +103,8 @@ export default function App() {
           )}
         </div>
       </ErrorBoundary>
-      {!route?.insights && <UsageConsent />}
+      {/* Family opening a shared link came to watch one bus, so they aren't asked about usage. */}
+      {!route?.insights && !route?.shareToken && <UsageConsent />}
     </div>
   )
 }

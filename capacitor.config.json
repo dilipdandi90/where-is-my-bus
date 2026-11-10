@@ -1,8 +1,0 @@
-{
-  "appId": "in.whereismybus.app",
-  "appName": "Where Is My Bus",
-  "webDir": "dist",
-  "server": {
-    "androidScheme": "https"
-  }
-}

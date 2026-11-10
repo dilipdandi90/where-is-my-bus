@@ -212,7 +212,8 @@ a.press:active {
     opacity: 0;
   }
 
-  .track-move {
+  .track-move,
+  .bus-map-marker {
     transition: none;
   }
 
@@ -232,4 +233,41 @@ a.press:active {
   a.press:active {
     scale: none;
   }
+}
+
+/* The bus on the route map. It glides between updates, except while the map is zooming. */
+@media (prefers-reduced-motion: no-preference) {
+  .bus-map-marker {
+    transition: transform 4s linear;
+  }
+  .leaflet-zoom-anim .bus-map-marker,
+  .leaflet-dragging .bus-map-marker {
+    transition: none;
+  }
+}
+.bus-map-pin {
+  display: flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 3px solid var(--color-road);
+  border-radius: 9999px;
+  background: var(--color-ink);
+  color: var(--color-paper);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.35);
+}
+.bus-map-pin.is-estimate {
+  border-color: var(--color-card);
+  background: var(--color-ink-soft);
+}
+.bus-map-pin svg {
+  width: 17px;
+  height: 17px;
+}
+.bus-map-label {
+  border-radius: 0.5rem;
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  color: var(--color-ink);
 }

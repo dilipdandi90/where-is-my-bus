@@ -51,13 +51,14 @@ public final class GtfsLoader {
 
     private GtfsLoader() {}
 
-    private record Route(String agency, String shortName, String longName) {}
+    private record Route(String agency, String shortName, String longName, String color, String textColor) {}
 
     private record TripInfo(String routeId, String serviceId, String name) {}
 
     private record Draft(String id, TripInfo info, int[] stopIdx, int start, int[] offsets, double km) {}
 
-    private record Group(String number, String operator, String label, int[] stopIdx, List<Trip> trips, Set<String> routeIds) {}
+    private record Group(String number, String operator, String label, int[] stopIdx, List<Trip> trips, Set<String> routeIds,
+                         String color, String textColor) {}
 
     private static final class TimedStops {
         int size;
@@ -108,13 +109,15 @@ public final class GtfsLoader {
                 if (!lat.isEmpty() && !lon.isEmpty()) {
                     String id = get(r, "stop_id"), name = get(r, "stop_name");
                     stopIndex.put(id, stops.size());
-                    stops.add(new Stop(id, name, normalize(name), Double.parseDouble(lat), Double.parseDouble(lon)));
+                    stops.add(new Stop(id, name, normalize(name), Double.parseDouble(lat), Double.parseDouble(lon),
+                            get(r, "platform_code")));
                 }
             });
 
             Map<String, Route> routes = new HashMap<>();
             read(zip, "routes.txt", r -> routes.put(get(r, "route_id"),
-                    new Route(get(r, "agency_id"), get(r, "route_short_name"), get(r, "route_long_name"))));
+                    new Route(get(r, "agency_id"), get(r, "route_short_name"), get(r, "route_long_name"),
+                            get(r, "route_color"), get(r, "route_text_color"))));
 
             Map<String, Integer> weekdays = new HashMap<>();
             readOptional(zip, "calendar.txt", r -> {
@@ -176,19 +179,22 @@ public final class GtfsLoader {
             drafts.add(new Draft(e.getKey(), info, stopIdx, times[0] % DAY_SEC, offsets, km[km.length - 1]));
         }
 
+        // Trips on a calendar that never runs carry no real times (see FeedData.Service.timetabled).
         boolean repaired = TimingRepair.isNeeded(drafts.stream()
+                .filter(d -> weekdays.getOrDefault(d.info().serviceId(), EVERY_DAY) != 0)
                 .map(d -> new TimingRepair.Sample(d.km(), d.offsets())).toList());
 
         Map<String, Group> groups = new LinkedHashMap<>();
         Map<Key, int[]> sharedOffsets = new HashMap<>();
         Map<String, Trip> tripById = new HashMap<>(drafts.size() * 2);
         for (Draft d : drafts) {
-            Route route = routes.getOrDefault(d.info().routeId(), new Route("", "", d.info().routeId()));
+            Route route = routes.getOrDefault(d.info().routeId(), new Route("", "", d.info().routeId(), "", ""));
             String number = busNumber(rule, d.info().name(), route.shortName(), route.longName(), d.info().routeId());
             // Operators in one feed reuse numbers (BEST, TMT and KDMT each have a route 1).
             String id = serviceId(route.agency() + "|" + number, d.stopIdx(), stops);
             Group group = groups.computeIfAbsent(id, k -> new Group(number, route.agency(),
-                    d.info().name().isEmpty() ? route.longName() : d.info().name(), d.stopIdx(), new ArrayList<>(), new HashSet<>()));
+                    d.info().name().isEmpty() ? route.longName() : d.info().name(), d.stopIdx(), new ArrayList<>(), new HashSet<>(),
+                    route.color(), route.textColor()));
             group.routeIds().add(d.info().routeId());
             int[] offsets = sharedOffsets.computeIfAbsent(
                     new Key(repaired ? TimingRepair.repair(d.offsets()) : d.offsets()), Key::values);
@@ -205,7 +211,7 @@ public final class GtfsLoader {
             g.trips().sort((a, b) -> Integer.compare(a.startSec(), b.startSec()));
             List<Stop> serviceStops = Arrays.stream(g.stopIdx()).mapToObj(stops::get).toList();
             Service service = new Service(id, g.number(), g.operator(), g.label(), serviceStops,
-                    kmCache.get(new Key(g.stopIdx())), List.copyOf(g.trips()), Set.copyOf(g.routeIds()));
+                    kmCache.get(new Key(g.stopIdx())), List.copyOf(g.trips()), Set.copyOf(g.routeIds()), g.color(), g.textColor());
             services.add(service);
             serviceById.put(id, service);
             serviceStops.forEach(s -> stopNames.computeIfAbsent(s.key(),

@@ -26,8 +26,10 @@ public final class Connections {
      * @param boardStopIndex where to get on, within the service's stops
      * @param alightStopIndex where to get off
      * @param tomorrow true for tomorrow's buses, which are listed when none are left today
+     * @param untimed true for a line with no published timetable: it goes there, but there are no times
      */
-    public record Connection(Service service, Trip trip, int boardStopIndex, int alightStopIndex, boolean tomorrow) {
+    public record Connection(Service service, Trip trip, int boardStopIndex, int alightStopIndex, boolean tomorrow,
+                             boolean untimed) {
         public int boardSec() {
             return trip.startSec() + trip.offsets()[boardStopIndex];
         }
@@ -46,7 +48,7 @@ public final class Connections {
      * @param nowSec seconds since midnight
      * @param radiusKm how far from each named stop still counts as that place
      * @return all of today's buses in boarding order, including ones already gone. If none are left
-     *         today, tomorrow's follow.
+     *         today, tomorrow's follow. Lines with no timetable come last, once each.
      */
     public static List<Connection> find(FeedData feed, String from, String to, int isoWeekday, int nowSec, double radiusKm) {
         Map<Stop, Double> nearFrom = stopsNear(feed, GtfsLoader.normalize(from), radiusKm);
@@ -57,17 +59,22 @@ public final class Connections {
         int tomorrow = isoWeekday % 7 + 1;
         List<Connection> today = new ArrayList<>();
         List<Connection> next = new ArrayList<>();
+        List<Connection> untimed = new ArrayList<>();
         for (Service service : feed.services()) {
             int[] pair = bestPair(service, nearFrom, nearTo);
             if (pair == null) {
                 continue;
             }
+            if (!service.timetabled) {
+                untimed.add(new Connection(service, service.trips.getFirst(), pair[0], pair[1], false, true));
+                continue;
+            }
             for (Trip trip : service.trips) {
                 if (trip.runsOn(isoWeekday)) {
-                    today.add(new Connection(service, trip, pair[0], pair[1], false));
+                    today.add(new Connection(service, trip, pair[0], pair[1], false, false));
                 }
                 if (trip.runsOn(tomorrow)) {
-                    next.add(new Connection(service, trip, pair[0], pair[1], true));
+                    next.add(new Connection(service, trip, pair[0], pair[1], true, false));
                 }
             }
         }
@@ -76,6 +83,8 @@ public final class Connections {
             found.addAll(next);
         }
         found.sort(Comparator.comparing(Connection::tomorrow).thenComparingInt(Connection::boardSec));
+        // Lines without times can't be put in order among the others, so they come last.
+        found.addAll(untimed);
         return found;
     }
 

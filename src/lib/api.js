@@ -6,6 +6,7 @@ export class ApiError extends Error {}
 
 function messageFor(status) {
   if (status === 401) return "That key isn't right."
+  if (status === 410) return 'This bus is no longer in the timetable.'
   if (status === 404) return "We couldn't find this. The timetable may have changed, so try searching again."
   if (status === 503) return 'Bus data is still loading. Please try again in a moment.'
   if (status >= 500) return 'Something went wrong on our side. Please try again.'
@@ -45,6 +46,10 @@ export const api = {
   liveBuses: (feed, id, signal) => get(`/${feed}/services/${enc(id)}/buses`, signal),
   live: (feed, id, signal) => get(`/${feed}/trip/live?id=${enc(id)}`, signal),
   report: (feed, id, body) => post(`/feeds/${feed}/trip/reports?id=${enc(id)}`, body),
+  createShare: async (feed, tripId) => (await post('/shares', { feed, tripId })).json(),
+  share: async (token, signal) => (await request(`/shares/${enc(token)}`, { signal })).json(),
+  sharePosition: (token, body) => post(`/shares/${enc(token)}/position`, body),
+  endShare: (token, key) => post(`/shares/${enc(token)}/end`, { key }),
   locateCells: async (cells) => (await post('/cells/locate', { cells })).json(),
   usageStatus: async () => (await request('/usage/status')).json(),
   usageEvent: (body) => post('/usage/events', body),

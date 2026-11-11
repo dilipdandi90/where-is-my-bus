@@ -1,4 +1,9 @@
-import { formatClock, formatDuration, formatKm } from '../lib/time.js'
+import { useEffect } from 'react'
+import { api } from '../lib/api.js'
+import { CACHE_MS, nextDepartureSec } from '../lib/cache.js'
+import { prefetchData, useData, useTick } from '../lib/hooks.js'
+import { defaultDeparture } from '../lib/journey.js'
+import { formatClock, formatDuration, formatKm, secondsNow } from '../lib/time.js'
 
 // Results slide in one after another, as elsewhere on the home screen.
 const stagger = (i) => ({ animationDelay: `${Math.min(i * 60, 400)}ms` })
@@ -61,17 +66,7 @@ function LineCard({ feed, directions, onOpen }) {
 
       <div className="grid grid-cols-2 gap-2 p-3">
         {directions.map((s) => (
-          <a
-            key={s.serviceId}
-            href={`#/${feed.id}/bus/${s.serviceId}`}
-            onClick={() => onOpen(feed.id, s)}
-            className="press group rounded-2xl border-2 px-3 py-2.5 transition-colors"
-            style={{ borderColor: `color-mix(in srgb, ${colour} 45%, transparent)`, background: `color-mix(in srgb, ${colour} 7%, white)` }}
-          >
-            <span className="block text-[11px] font-semibold tracking-wide text-ink-soft uppercase">Towards</span>
-            <span className="block truncate text-sm font-bold">{s.to}</span>
-            <span className="mt-1 block text-xs text-ink-soft">{nextTrain(s)}</span>
-          </a>
+          <Direction key={s.serviceId} feed={feed} service={s} colour={colour} onOpen={onOpen} />
         ))}
       </div>
     </article>
@@ -95,9 +90,38 @@ function RouteStrip({ colour, west, east }) {
   )
 }
 
-function nextTrain(s) {
+/**
+ * One direction of a line. Its timetable is loaded and saved here, for a week, so the next train is
+ * worked out on the phone (right even from an old copy or offline) and the line opens at once when
+ * tapped. The train that screen will show first is saved too.
+ */
+function Direction({ feed, service: s, colour, onOpen }) {
+  useTick(30_000)
+  const { data: detail } = useData(`svc|${feed.id}|${s.serviceId}`, (signal) => api.service(feed.id, s.serviceId, signal), { cacheMs: CACHE_MS.metro })
+  const nowSec = secondsNow(feed.timezone ?? 'Asia/Kolkata')
+  const firstTripId = detail ? (detail.untimedTripId ?? defaultDeparture(detail.departures, nowSec)?.tripId) : null
+
+  useEffect(() => {
+    if (firstTripId) prefetchData(`trip|${feed.id}|${firstTripId}`, () => api.trip(feed.id, firstTripId), CACHE_MS.metro)
+  }, [feed.id, firstTripId])
+
+  return (
+    <a
+      href={`#/${feed.id}/bus/${s.serviceId}`}
+      onClick={() => onOpen(feed.id, s)}
+      className="press group rounded-2xl border-2 px-3 py-2.5 transition-colors"
+      style={{ borderColor: `color-mix(in srgb, ${colour} 45%, transparent)`, background: `color-mix(in srgb, ${colour} 7%, white)` }}
+    >
+      <span className="block text-[11px] font-semibold tracking-wide text-ink-soft uppercase">Towards</span>
+      <span className="block truncate text-sm font-bold">{s.to}</span>
+      <span className="mt-1 block text-xs text-ink-soft">{nextTrain(s, detail ? nextDepartureSec(detail.departures, nowSec) : s.nextDepartureSec)}</span>
+    </a>
+  )
+}
+
+function nextTrain(s, next) {
   if (s.timetabled === false) return 'Track live on board'
   if (s.departuresToday === 0) return 'No trains listed today'
-  if (s.nextDepartureSec == null) return 'No more trains today'
-  return `Next ${formatClock(s.nextDepartureSec)}`
+  if (next == null) return 'No more trains today'
+  return `Next ${formatClock(next)}`
 }

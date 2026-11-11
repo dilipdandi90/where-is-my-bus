@@ -43,6 +43,17 @@ function writeCache(key, data) {
 }
 
 /**
+ * Saves a copy for later, unless a fresh enough one is already saved, so a screen opened next shows at
+ * once and works offline. Failures are ignored: the screen loads it normally when opened.
+ */
+export function prefetchData(key, fetcher, cacheMs) {
+  if (readCache(key, cacheMs) !== undefined) return
+  fetcher()
+    .then((data) => writeCache(key, data))
+    .catch(() => {})
+}
+
+/**
  * Loads data for a key, returning {data, error, loading, refreshing, retry}. A null key loads nothing.
  * While retrying, the previous data stays available so screens don't blank out.
  *

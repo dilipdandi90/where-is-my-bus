@@ -4,8 +4,8 @@ import { ActivityIndicator, Keyboard, ScrollView, StyleSheet, Text, TextInput, V
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { api } from '../lib/api.js'
 import { useData, useDebounced, useTick } from '../lib/hooks.js'
-import { count, formatClock, formatDuration, formatKm, isMetro, secondsNow, wordsFor } from '../lib/shared.js'
-import { useStoredState } from '../lib/storage.js'
+import { CACHE_MS, count, defaultDeparture, formatClock, formatDuration, formatKm, isMetro, nextDepartureSec, secondsNow, wordsFor } from '../lib/shared.js'
+import { prefetchData, useStoredState } from '../lib/storage.js'
 import { colors } from '../lib/theme.js'
 import { BusIcon, ErrorMessage, Message, PlatformChip, Press, SearchIcon, Segmented, ServicePlate, SwapIcon, TrainIcon } from './ui.js'
 
@@ -162,7 +162,11 @@ function ServiceSearch({ feed }) {
   const words = wordsFor(feed)
   // A metro has only a few lines, so all show before anything is typed. Every line's name ends in "Line".
   const lookup = q || (metro ? 'line' : '')
-  const { data, error, loading, retry } = useData(lookup ? `bus|${feed.id}|${lookup}` : null, (signal) => api.buses(feed.id, lookup, signal), { cacheMs: CACHE_SEARCH_MS })
+  // Metro lines are built into the server, so the list is kept for a week; next trains are worked out
+  // from each line's saved timetable (see MetroDirection).
+  const { data, error, loading, retry } = useData(lookup ? `bus|${feed.id}|${lookup}` : null, (signal) => api.buses(feed.id, lookup, signal), {
+    cacheMs: metro ? CACHE_MS.metro : CACHE_SEARCH_MS,
+  })
 
   return (
     <View>
@@ -248,18 +252,39 @@ function MetroLines({ feed, services }) {
         </View>
         <View style={{ flexDirection: 'row', gap: 8, padding: 12 }}>
           {directions.map((s) => (
-            <Press key={s.serviceId} onPress={() => openService(feed.id, s.serviceId)} style={[styles.direction, { borderColor: `${colour}73`, backgroundColor: `${colour}12` }]}>
-              <Text style={styles.towards}>TOWARDS</Text>
-              <Text style={{ fontWeight: '700', color: colors.ink }} numberOfLines={1}>{s.to}</Text>
-              <Text style={[styles.small, { marginTop: 4 }]}>
-                {s.timetabled === false ? 'Track live on board' : s.nextDepartureSec != null ? `Next ${formatClock(s.nextDepartureSec)}` : 'No more trains today'}
-              </Text>
-            </Press>
+            <MetroDirection key={s.serviceId} feed={feed} service={s} colour={colour} />
           ))}
         </View>
       </View>
     )
   })
+}
+
+/**
+ * One direction of a metro line. Its timetable is loaded and saved here, for a week, so the next train
+ * is worked out on the phone (right even from an old copy or offline) and the line opens at once when
+ * tapped. The train that screen will show first is saved too.
+ */
+function MetroDirection({ feed, service: s, colour }) {
+  useTick(30_000)
+  const { data: detail } = useData(`svc|${feed.id}|${s.serviceId}`, (signal) => api.service(feed.id, s.serviceId, signal), { cacheMs: CACHE_MS.metro })
+  const nowSec = secondsNow(feed.timezone ?? 'Asia/Kolkata')
+  const firstTripId = detail ? (detail.untimedTripId ?? defaultDeparture(detail.departures, nowSec)?.tripId) : null
+  const next = detail ? nextDepartureSec(detail.departures, nowSec) : s.nextDepartureSec
+
+  useEffect(() => {
+    if (firstTripId) prefetchData(`trip|${feed.id}|${firstTripId}`, () => api.trip(feed.id, firstTripId), CACHE_MS.metro)
+  }, [feed.id, firstTripId])
+
+  return (
+    <Press onPress={() => openService(feed.id, s.serviceId)} style={[styles.direction, { borderColor: `${colour}73`, backgroundColor: `${colour}12` }]}>
+      <Text style={styles.towards}>TOWARDS</Text>
+      <Text style={{ fontWeight: '700', color: colors.ink }} numberOfLines={1}>
+        {s.to}
+      </Text>
+      <Text style={[styles.small, { marginTop: 4 }]}>{s.timetabled === false ? 'Track live on board' : next != null ? `Next ${formatClock(next)}` : 'No more trains today'}</Text>
+    </Press>
+  )
 }
 
 function BetweenSearch({ feed }) {

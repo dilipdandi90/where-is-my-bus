@@ -14,7 +14,7 @@
     "android": {
       "package": "in.whereismybus.app",
       "adaptiveIcon": {
-        "backgroundColor": "#0F1F3D",
+        "backgroundColor": "#13274D",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

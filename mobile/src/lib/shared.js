@@ -4,4 +4,5 @@ export { assignBuses, atRouteEnd, AT_STOP_KM, defaultDeparture, describeJourney,
 export { nearestDeparture, updatePosition } from '../../../src/lib/tracker.js'
 export { clockForTrip, formatAge, formatClock, formatDistance, formatDuration, formatKm, secondsNow } from '../../../src/lib/time.js'
 export { count, isMetro, wordsFor } from '../../../src/lib/words.js'
+export { CACHE_MS, nextDepartureSec, timetableCacheMs } from '../../../src/lib/cache.js'
 export { backupAllowed, MAX_USABLE_ACCURACY_M, TOWER_POLL_MS, towerFix } from '../../../src/lib/cellFix.js'

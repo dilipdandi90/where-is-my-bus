@@ -21,6 +21,7 @@ import {
   isMetro,
   nearestDeparture,
   secondsNow,
+  timetableCacheMs,
   wordsFor,
 } from '../lib/shared.js'
 import { familySharingAvailable, useFamilyShare, useRiderSharing } from '../lib/sharing.js'
@@ -31,7 +32,6 @@ import RouteMap from './RouteMap.js'
 import Timeline from './Timeline.js'
 import { ErrorMessage, Message, Press, Segmented, ServicePlate } from './ui.js'
 
-const CACHE_TIMETABLE_MS = 12 * 3600 * 1000
 const FALLBACK_SPEED_KMH = 20
 const KEEP_AWAKE_TAG = 'tracking'
 
@@ -75,7 +75,10 @@ export default function BusScreen({ feedId, serviceId, initialTripId }) {
   const [picking, setPicking] = useState(false)
   const [helping, setHelping] = useState(false)
 
-  const { data: service, error: serviceError, retry: retryService } = useData(`svc|${feedId}|${serviceId}`, (signal) => api.service(feedId, serviceId, signal), { cacheMs: CACHE_TIMETABLE_MS })
+  const { data: service, error: serviceError, retry: retryService } = useData(`svc|${feedId}|${serviceId}`, (signal) => api.service(feedId, serviceId, signal), {
+    // A saved copy shows at once while the fresh one loads: kept 12 hours for buses, a week for metro.
+    cacheMs: timetableCacheMs(feed),
+  })
   const nowSec = secondsNow(service?.timezone ?? 'Asia/Kolkata')
   const timetabled = service?.timetabled !== false
   const scheme = lineScheme(metro ? service?.color : null)
@@ -93,7 +96,7 @@ export default function BusScreen({ feedId, serviceId, initialTripId }) {
   const autoBus = mode === 'off' && !pickedTripId && running.length > 0 ? running.reduce((a, b) => (b.km > a.km ? b : a)) : null
   const autoBusTrip = autoBus ? nearestDeparture(service.departures, service.km, autoBus.km, nowSec, Infinity)?.departure.tripId : null
   const tripId = pickedTripId ?? (mode !== 'off' ? matchedTripId : null) ?? autoBusTrip ?? fallback?.tripId ?? service?.untimedTripId ?? null
-  const { data: trip, error: tripError, retry: retryTrip } = useData(tripId && `trip|${feedId}|${tripId}`, (signal) => api.trip(feedId, tripId, signal), { cacheMs: CACHE_TIMETABLE_MS })
+  const { data: trip, error: tripError, retry: retryTrip } = useData(tripId && `trip|${feedId}|${tripId}`, (signal) => api.trip(feedId, tripId, signal), { cacheMs: timetableCacheMs(feed) })
 
   const live = useRiderStatus(feedId, tripId, refreshCount)
   useRiderSharing({ feedId, tripId, mode, enabled: helping, fixRef })

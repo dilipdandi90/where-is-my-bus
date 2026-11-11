@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
+import { timetableCacheMs } from '../lib/cache.js'
 import { canReadTowers, readCells } from '../lib/cells.js'
 import { track } from '../lib/usage.js'
 import { useStopAlarm } from '../lib/alarm.js'
@@ -47,8 +48,6 @@ const TRACKING_OPTIONS = [
   { id: 'gps', label: 'GPS', detail: 'Most accurate', hint: "Uses your phone's GPS. Best with a clear view of the sky, and uses more battery." },
 ]
 const FALLBACK_SPEED_KMH = 20
-// Timetables change at most daily, so a saved copy shows instantly and the fresh one replaces it.
-const CACHE_TIMETABLE_MS = 12 * 3600 * 1000
 
 /** @param initialTripId the departure the rider tapped, if they tapped one, shown instead of the default. */
 export default function BusScreen({ feedId, feed, serviceId, initialTripId = null }) {
@@ -61,7 +60,10 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
   const [pickedTripId, setPickedTripId] = useState(initialTripId)
   const [matchedTripId, setMatchedTripId] = useState(null)
 
-  const { data: service, error: serviceError, retry: retryService, refreshing: serviceRefreshing } = useData(`svc|${feedId}|${serviceId}`, (signal) => api.service(feedId, serviceId, signal), { cacheMs: CACHE_TIMETABLE_MS })
+  const { data: service, error: serviceError, retry: retryService, refreshing: serviceRefreshing } = useData(`svc|${feedId}|${serviceId}`, (signal) => api.service(feedId, serviceId, signal), {
+    // A saved copy shows at once while the fresh one loads: kept 12 hours for buses, a week for metro.
+    cacheMs: timetableCacheMs(feed),
+  })
 
   const openedNumber = service?.number
   useEffect(() => {
@@ -94,7 +96,7 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
   const autoBus = mode === 'off' && !pickedTripId && !followedPlate && running.length > 0 ? running.reduce((a, b) => (b.km > a.km ? b : a)) : null
   const autoBusTrip = autoBus ? nearestDeparture(service.departures, service.km, autoBus.km, nowSec, Infinity)?.departure.tripId : null
   const tripId = pickedTripId ?? (mode !== 'off' ? matchedTripId : null) ?? autoBusTrip ?? fallback?.tripId ?? service?.untimedTripId ?? null
-  const { data: trip, error: tripError, retry: retryTrip, refreshing: tripRefreshing } = useData(tripId && `trip|${feedId}|${tripId}`, (signal) => api.trip(feedId, tripId, signal), { cacheMs: CACHE_TIMETABLE_MS })
+  const { data: trip, error: tripError, retry: retryTrip, refreshing: tripRefreshing } = useData(tripId && `trip|${feedId}|${tripId}`, (signal) => api.trip(feedId, tripId, signal), { cacheMs: timetableCacheMs(feed) })
 
   const live = useLivePolling(feedId, tripId, mode, refreshCount)
   const [sharing, setSharing] = useState(false)

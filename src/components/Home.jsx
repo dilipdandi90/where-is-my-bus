@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useState } from 'react'
 import { api } from '../lib/api.js'
+import { CACHE_MS } from '../lib/cache.js'
 import { useData, useDebounced, useSessionState, useStoredState, useTick } from '../lib/hooks.js'
 import { formatClock, formatDuration, formatKm, secondsNow } from '../lib/time.js'
 import { track } from '../lib/usage.js'
@@ -183,7 +184,11 @@ function BusSearch({ feed, recent, onOpen }) {
   // A metro has only a few lines, so all of them show before anything is typed. Every line's name
   // ends in "Line", which the search matches.
   const lookup = q || (metro ? 'line' : '')
-  const { data, error, loading, retry } = useData(lookup ? `bus|${feed.id}|${lookup}` : null, (signal) => api.buses(feed.id, lookup, signal), { cacheMs: CACHE_SEARCH_MS })
+  // Metro lines are built into the server, so the list is kept for a week; next trains are worked out
+  // from each line's saved timetable (see MetroLines).
+  const { data, error, loading, retry } = useData(lookup ? `bus|${feed.id}|${lookup}` : null, (signal) => api.buses(feed.id, lookup, signal), {
+    cacheMs: metro ? CACHE_MS.metro : CACHE_SEARCH_MS,
+  })
 
   // Only once they've stopped typing, so "1", "11" and "115" count as one search.
   const settled = useDebounced(q, 1500)

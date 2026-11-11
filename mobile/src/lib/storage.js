@@ -22,6 +22,19 @@ export async function writeCache(key, data) {
 }
 
 /**
+ * Saves a copy for later, unless a fresh enough one is already saved, so a screen opened next shows at
+ * once and works offline. Failures are ignored: the screen loads it normally when opened.
+ */
+export async function prefetchData(key, fetcher, maxAgeMs) {
+  if ((await readCache(key, maxAgeMs)) !== undefined) return
+  try {
+    await writeCache(key, await fetcher())
+  } catch {
+    // Offline or the server is waking up. Nothing is lost.
+  }
+}
+
+/**
  * State remembered between visits. Storage on phones is asynchronous, so it starts as `initial` and
  * switches to the saved value a moment later.
  *

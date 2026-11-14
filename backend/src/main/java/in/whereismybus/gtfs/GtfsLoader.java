@@ -55,7 +55,7 @@ public final class GtfsLoader {
 
     private record TripInfo(String routeId, String serviceId, String name) {}
 
-    private record Draft(String id, TripInfo info, int[] stopIdx, int start, int[] offsets, double km) {}
+    private record Draft(String id, TripInfo info, int[] stopIdx, int start, int[] offsets, double km, int[] arrivals) {}
 
     private record Group(String number, String operator, String label, int[] stopIdx, List<Trip> trips, Set<String> routeIds,
                          String color, String textColor) {}
@@ -65,15 +65,18 @@ public final class GtfsLoader {
         int[] seq = new int[32];
         int[] stop = new int[32];
         int[] time = new int[32];
+        int[] arrival = new int[32];
 
-        void add(int s, int st, int t) {
+        void add(int s, int st, int t, int a) {
             if (size == seq.length) {
                 seq = Arrays.copyOf(seq, size * 2);
                 stop = Arrays.copyOf(stop, size * 2);
                 time = Arrays.copyOf(time, size * 2);
+                arrival = Arrays.copyOf(arrival, size * 2);
             }
             seq[size] = s;
             stop[size] = st;
+            arrival[size] = a;
             time[size++] = t;
         }
     }
@@ -142,10 +145,11 @@ public final class GtfsLoader {
             read(zip, "stop_times.txt", r -> {
                 Integer stop = stopIndex.get(get(r, "stop_id"));
                 if (stop != null) {
-                    String t = get(r, "departure_time");
+                    String dep = get(r, "departure_time");
+                    String arr = get(r, "arrival_time");
                     timed.computeIfAbsent(get(r, "trip_id"), k -> new TimedStops())
                             .add(Integer.parseInt(get(r, "stop_sequence")), stop,
-                                    parseTime(t.isEmpty() ? get(r, "arrival_time") : t));
+                                    parseTime(dep.isEmpty() ? arr : dep), parseTime(arr.isEmpty() ? dep : arr));
                 }
             });
 
@@ -176,7 +180,8 @@ public final class GtfsLoader {
                 offsets[i] = Math.max(offsets[i - 1], times[i] - times[0]);
             }
             double[] km = kmCache.computeIfAbsent(new Key(stopIdx), k -> cumulativeKm(k.values(), stops));
-            drafts.add(new Draft(e.getKey(), info, stopIdx, times[0] % DAY_SEC, offsets, km[km.length - 1]));
+            drafts.add(new Draft(e.getKey(), info, stopIdx, times[0] % DAY_SEC, offsets, km[km.length - 1],
+                    arrivals(fillBlanks(Arrays.copyOf(t.arrival, t.size)), times[0], offsets)));
         }
 
         // Trips on a calendar that never runs carry no real times (see FeedData.Service.timetabled).
@@ -198,8 +203,10 @@ public final class GtfsLoader {
             group.routeIds().add(d.info().routeId());
             int[] offsets = sharedOffsets.computeIfAbsent(
                     new Key(repaired ? TimingRepair.repair(d.offsets()) : d.offsets()), Key::values);
+            // Repaired times are rebuilt from departures alone, so their arrivals would no longer fit.
+            int[] arrivals = repaired || d.arrivals() == null ? null : sharedOffsets.computeIfAbsent(new Key(d.arrivals()), Key::values);
             Trip trip = new Trip(d.id(), id, d.start(), offsets,
-                    weekdays.getOrDefault(d.info().serviceId(), EVERY_DAY));
+                    weekdays.getOrDefault(d.info().serviceId(), EVERY_DAY), arrivals);
             group.trips().add(trip);
             tripById.put(trip.id(), trip);
         }
@@ -275,15 +282,35 @@ public final class GtfsLoader {
             return;
         }
         Arrays.sort(order, (a, b) -> Integer.compare(t.seq[a], t.seq[b]));
-        int[] stop = new int[t.size], time = new int[t.size], seq = new int[t.size];
+        int[] stop = new int[t.size], time = new int[t.size], seq = new int[t.size], arrival = new int[t.size];
         for (int i = 0; i < t.size; i++) {
             seq[i] = t.seq[order[i]];
             stop[i] = t.stop[order[i]];
             time[i] = t.time[order[i]];
+            arrival[i] = t.arrival[order[i]];
         }
         t.seq = seq;
         t.stop = stop;
         t.time = time;
+        t.arrival = arrival;
+    }
+
+    /**
+     * Seconds from the first departure to arriving at each stop, kept between leaving the stop before
+     * and leaving this one. Null when they all equal the departures (or arrivals are missing).
+     */
+    static int[] arrivals(int[] arrivalTimes, int firstDeparture, int[] offsets) {
+        if (arrivalTimes == null) {
+            return null;
+        }
+        int[] out = new int[offsets.length];
+        boolean differs = false;
+        for (int i = 0; i < offsets.length; i++) {
+            int a = arrivalTimes[i] - firstDeparture;
+            out[i] = i == 0 ? 0 : Math.max(offsets[i - 1], Math.min(offsets[i], a));
+            differs |= out[i] != offsets[i];
+        }
+        return differs ? out : null;
     }
 
     /** GTFS allows blank times between timed stops. Returns null when the ends themselves are blank. */

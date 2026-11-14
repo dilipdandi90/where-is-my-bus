@@ -4,7 +4,7 @@ import { ActivityIndicator, Keyboard, ScrollView, StyleSheet, Text, TextInput, V
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { api } from '../lib/api.js'
 import { useData, useDebounced, useTick } from '../lib/hooks.js'
-import { CACHE_MS, count, defaultDeparture, formatClock, formatDuration, formatKm, isMetro, nextDepartureSec, secondsNow, wordsFor } from '../lib/shared.js'
+import { CACHE_MS, count, defaultDeparture, formatClock, formatDuration, formatKm, isMetro, isRail, modeOf, secondsNow, serviceDay, wordsFor } from '../lib/shared.js'
 import { prefetchData, useStoredState } from '../lib/storage.js'
 import { colors } from '../lib/theme.js'
 import { BusIcon, ErrorMessage, Message, PlatformChip, Press, SearchIcon, Segmented, ServicePlate, SwapIcon, TrainIcon } from './ui.js'
@@ -79,31 +79,33 @@ function shortName(feed) {
   return place.length <= 10 ? place : feed.operators.split(',')[0].trim()
 }
 
+const MODES = [
+  ['bus', 'Bus', BusIcon],
+  ['metro', 'Metro', TrainIcon],
+  ['rail', 'Train', TrainIcon],
+]
+
 function FeedPicker({ feeds, selected, onSelect }) {
-  const [lastBus, setLastBus] = useStoredState('wimb.lastBusFeed', null)
-  const [lastMetro, setLastMetro] = useStoredState('wimb.lastMetroFeed', null)
-  const metro = isMetro(selected)
-  const busFeeds = feeds.filter((f) => !isMetro(f))
-  const metroFeeds = feeds.filter((f) => isMetro(f))
-  const shown = metro ? metroFeeds : busFeeds
+  // The last feed picked in each mode, so switching back is one tap.
+  const [lastByMode, setLastByMode] = useStoredState('wimb.lastFeedByMode', {})
+  const mode = modeOf(selected)
+  const shown = feeds.filter((f) => modeOf(f) === mode)
 
   const pick = (f) => {
-    if (isMetro(f)) setLastMetro(f.id)
-    else setLastBus(f.id)
+    setLastByMode({ ...lastByMode, [modeOf(f)]: f.id })
     onSelect(f.id)
   }
   // Set when the server has nothing for the tapped mode, so the tap visibly does something.
   const [missing, setMissing] = useState(null)
-  const switchTo = (toMetro) => {
-    if (toMetro === metro) return
-    const list = toMetro ? metroFeeds : busFeeds
+  const switchTo = (to) => {
+    if (to === mode) return
+    const list = feeds.filter((f) => modeOf(f) === to)
     if (list.length === 0) {
-      setMissing(toMetro ? 'Metro' : 'Bus')
+      setMissing(MODES.find(([m]) => m === to)[1])
       return
     }
     setMissing(null)
-    if (selected) (metro ? setLastMetro : setLastBus)(selected.id)
-    const remembered = list.find((f) => f.id === (toMetro ? lastMetro : lastBus))
+    const remembered = list.find((f) => f.id === lastByMode[to])
     pick(remembered ?? list[0])
   }
 
@@ -111,12 +113,9 @@ function FeedPicker({ feeds, selected, onSelect }) {
     <View style={{ marginTop: 14 }}>
       <Segmented
         dark
-        value={metro}
+        value={mode}
         onChange={switchTo}
-        options={[
-          { value: false, label: 'Bus', icon: (c) => <BusIcon size={20} color={c} /> },
-          { value: true, label: 'Metro', icon: (c) => <TrainIcon size={20} color={c} /> },
-        ]}
+        options={MODES.map(([m, label, Icon]) => ({ value: m, label, icon: (c) => <Icon size={20} color={c} /> }))}
       />
       {shown.length > 1 && (
         <View style={{ flexDirection: 'row', gap: 6, marginTop: 10 }} accessibilityRole="radiogroup">
@@ -183,15 +182,22 @@ function ServiceSearch({ feed }) {
 
 function ServiceCard({ feed, service: s }) {
   const words = wordsFor(feed)
+  const rail = isRail(feed)
   return (
     <Press onPress={() => openService(feed.id, s.serviceId)} style={styles.card}>
       {!feed.numbersAreCodes && (
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <ServicePlate service={s} />
-          {s.operator ? <Text style={styles.small}>{s.operator}</Text> : null}
+          {!rail && s.operator ? (
+            <Text style={[styles.small, { flexShrink: 1 }]} numberOfLines={1}>
+              {s.operator}
+            </Text>
+          ) : null}
         </View>
       )}
-      <Text style={styles.route}>
+      {/* Trains are known by name (Hutatma Express), so it leads, with the route underneath. */}
+      {rail && <Text style={styles.route}>{s.label}</Text>}
+      <Text style={rail ? [styles.small, { fontSize: 14, marginTop: 2 }] : styles.route}>
         {s.from} <Text style={{ color: colors.inkSoft }}>→</Text> {s.to}
       </Text>
       {feed.numbersAreCodes && <Text style={styles.small}>{s.operator} · Route code {s.number}</Text>}
@@ -205,7 +211,9 @@ function ServiceCard({ feed, service: s }) {
           : s.departuresToday === 0
             ? 'No departures listed today'
             : s.nextDepartureSec != null
-              ? `Next at ${formatClock(s.nextDepartureSec)} · ${s.departuresToday} today`
+              ? rail
+                ? `Next at ${formatClock(s.nextDepartureSec)} today`
+                : `Next at ${formatClock(s.nextDepartureSec)} · ${s.departuresToday} today`
               : 'No more in our timetable today'}
       </Text>
     </Press>
@@ -269,8 +277,10 @@ function MetroDirection({ feed, service: s, colour }) {
   useTick(30_000)
   const { data: detail } = useData(`svc|${feed.id}|${s.serviceId}`, (signal) => api.service(feed.id, s.serviceId, signal), { cacheMs: CACHE_MS.metro })
   const nowSec = secondsNow(feed.timezone ?? 'Asia/Kolkata')
-  const firstTripId = detail ? (detail.untimedTripId ?? defaultDeparture(detail.departures, nowSec)?.tripId) : null
-  const next = detail ? nextDepartureSec(detail.departures, nowSec) : s.nextDepartureSec
+  // A server that sends timing patterns lets the line screen build its trains itself; an older one
+  // doesn't, so the first train is saved ahead instead.
+  const firstTripId = detail && !detail.patterns ? (detail.untimedTripId ?? defaultDeparture(detail.departures, nowSec)?.tripId) : null
+  const status = detail ? metroStatus(detail.departures, nowSec) : { text: s.nextDepartureSec != null ? `Next ${formatClock(s.nextDepartureSec)}` : 'No more trains today' }
 
   useEffect(() => {
     if (firstTripId) prefetchData(`trip|${feed.id}|${firstTripId}`, () => api.trip(feed.id, firstTripId), CACHE_MS.metro)
@@ -282,9 +292,25 @@ function MetroDirection({ feed, service: s, colour }) {
       <Text style={{ fontWeight: '700', color: colors.ink }} numberOfLines={1}>
         {s.to}
       </Text>
-      <Text style={[styles.small, { marginTop: 4 }]}>{s.timetabled === false ? 'Track live on board' : next != null ? `Next ${formatClock(next)}` : 'No more trains today'}</Text>
+      {s.timetabled === false ? (
+        <Text style={[styles.small, { marginTop: 4 }]}>Track live on board</Text>
+      ) : (
+        <Text style={[styles.small, { marginTop: 4 }, status.tone === 'closed' && { color: colors.inkSoft, fontWeight: '600' }, status.tone === 'warn' && { color: colors.late, fontWeight: '700' }]}>
+          {status.text}
+        </Text>
+      )}
     </Press>
   )
+}
+
+/** What a metro direction card says about the trains: closed and when it opens, next and last, or a last-train warning. */
+function metroStatus(departures, nowSec) {
+  const day = serviceDay(departures, nowSec)
+  if (day.state === 'none') return { text: 'No trains listed today' }
+  if (day.state === 'before') return { text: `Opens at ${formatClock(day.first)}` }
+  if (day.state === 'after') return { text: `Closed · opens ${formatClock(day.first)}`, tone: 'closed' }
+  if (day.lastSoon) return { text: day.next === day.last ? `Last train ${formatClock(day.last)}` : `Next ${formatClock(day.next)} · last ${formatClock(day.last)}`, tone: 'warn' }
+  return { text: `Next ${formatClock(day.next)} · last ${formatClock(day.last)}` }
 }
 
 function BetweenSearch({ feed }) {
@@ -421,7 +447,7 @@ function Timetable({ feed, rows }) {
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   {!feed.numbersAreCodes && <ServicePlate metro={metro} service={r.service} />}
                   <Text style={{ fontWeight: '600', color: colors.ink, flexShrink: 1 }} numberOfLines={1}>
-                    {feed.numbersAreCodes ? r.service.to : `to ${r.service.to}`}
+                    {feed.numbersAreCodes ? r.service.to : isRail(feed) ? r.service.label : `to ${r.service.to}`}
                   </Text>
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>

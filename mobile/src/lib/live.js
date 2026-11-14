@@ -63,19 +63,19 @@ export function useLiveBuses(feedId, serviceId, refreshCount, service, enabled) 
 }
 
 /** Rider positions on a trip, from people on board who chose to share. */
-export function useRiderStatus(feedId, tripId, refreshCount) {
+export function useRiderStatus(feedId, tripId, refreshCount, runDate) {
   const [live, setLive] = useState(null)
   usePolling(
     async () => {
       try {
-        setLive(await api.live(feedId, tripId))
+        setLive(await api.live(feedId, tripId, undefined, runDate))
       } catch {
         setLive(null)
       }
     },
     config.pollMs,
     Boolean(tripId),
-    [feedId, tripId, refreshCount],
+    [feedId, tripId, refreshCount, runDate],
   )
   return live
 }

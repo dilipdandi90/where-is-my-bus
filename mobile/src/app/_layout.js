@@ -4,9 +4,12 @@ import { StatusBar } from 'expo-status-bar'
 import { useCallback, useState } from 'react'
 import { View } from 'react-native'
 import Intro from '../components/Intro.js'
+import { loadCacheIntoMemory } from '../lib/storage.js'
 
 // The launch screen fades straight into the animated intro, which starts from the same picture.
 SplashScreen.setOptions({ duration: 200, fade: true })
+// Saved timetables are read from disk in one batch while the intro plays, so screens draw at once.
+loadCacheIntoMemory()
 
 export default function RootLayout() {
   // Only once per launch: this layout stays mounted while moving between screens.

@@ -30,12 +30,14 @@ public final class Connections {
      */
     public record Connection(Service service, Trip trip, int boardStopIndex, int alightStopIndex, boolean tomorrow,
                              boolean untimed) {
+        /** The time of day it leaves the boarding stop, which may be a day or two into the journey. */
         public int boardSec() {
-            return trip.startSec() + trip.offsets()[boardStopIndex];
+            return (trip.startSec() + trip.offsets()[boardStopIndex]) % 86400;
         }
 
+        /** Seconds after midnight of the boarding day; past 86400 when it arrives on a later day. */
         public int alightSec() {
-            return trip.startSec() + trip.offsets()[alightStopIndex];
+            return boardSec() + trip.offsets()[alightStopIndex] - trip.offsets()[boardStopIndex];
         }
     }
 
@@ -70,10 +72,11 @@ public final class Connections {
                 continue;
             }
             for (Trip trip : service.trips) {
-                if (trip.runsOn(isoWeekday)) {
+                // Checked at the boarding stop, so a long train counts on the day it gets there.
+                if (trip.callsOn(pair[0], isoWeekday)) {
                     today.add(new Connection(service, trip, pair[0], pair[1], false, false));
                 }
-                if (trip.runsOn(tomorrow)) {
+                if (trip.callsOn(pair[0], tomorrow)) {
                     next.add(new Connection(service, trip, pair[0], pair[1], true, false));
                 }
             }

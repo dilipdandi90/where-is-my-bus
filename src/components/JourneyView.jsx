@@ -15,7 +15,8 @@ const VIEWS = [
  * The journey as a list of stops or on a map, with a switch between them that's remembered for the
  * visit. Props other than defaultView and storageKey go to the timeline.
  */
-export default function JourneyView({ defaultView = 'stops', storageKey = 'wimb.view', stopsLabel = 'Stops', lineColor, ...timeline }) {
+export default function JourneyView({ defaultView = 'stops', storageKey = 'wimb.view', stopsLabel = 'Stops', lineColor, train, showDays = false, ...timeline }) {
+  const isTrain = train ?? Boolean(lineColor)
   const [view, setView] = useSessionState(storageKey, defaultView)
 
   return (
@@ -36,11 +37,11 @@ export default function JourneyView({ defaultView = 'stops', storageKey = 'wimb.
       {view === 'map' ? (
         <div className="mt-2">
           <Suspense fallback={<Message title="Loading map…" />}>
-            <RouteMap stops={timeline.stops} journey={timeline.journey} lineColor={lineColor} />
+            <RouteMap stops={timeline.stops} journey={timeline.journey} lineColor={lineColor} train={isTrain} />
           </Suspense>
         </div>
       ) : (
-        <Timeline {...timeline} train={Boolean(lineColor)} />
+        <Timeline {...timeline} train={isTrain} showDays={showDays} />
       )}
     </>
   )

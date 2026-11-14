@@ -9,20 +9,20 @@ import { canReadTowers, readCells } from './tracking.js'
 const RIDER_ID = globalThis.crypto?.randomUUID?.() ?? `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 
 /** "Help others waiting": anonymously shares how far along the route the bus is, only while on. */
-export function useRiderSharing({ feedId, tripId, mode, enabled, fixRef }) {
+export function useRiderSharing({ feedId, tripId, mode, enabled, fixRef, runDate }) {
   useEffect(() => {
     if (!enabled || mode === 'off' || !tripId) return undefined
     const send = () => {
       const fix = fixRef.current
       if (!fix) return
-      api.report(feedId, tripId, { riderId: RIDER_ID, lat: fix.lat, lon: fix.lon, accuracy: fix.accuracy, source: mode }).catch(() => {})
+      api.report(feedId, tripId, { riderId: RIDER_ID, lat: fix.lat, lon: fix.lon, accuracy: fix.accuracy, source: mode }, runDate).catch(() => {})
       // A GPS position beside the connected tower is how the tower map grows.
       if (mode === 'gps' && canReadTowers()) readCells().then((cells) => cells.length && api.learnCells(cells, fix)).catch(() => {})
     }
     send()
     const id = setInterval(send, config.shareEveryMs)
     return () => clearInterval(id)
-  }, [enabled, mode, tripId, feedId, fixRef])
+  }, [enabled, mode, tripId, feedId, fixRef, runDate])
 }
 
 export const familySharingAvailable = SITE_URL !== ''

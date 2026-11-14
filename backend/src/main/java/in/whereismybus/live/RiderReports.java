@@ -15,6 +15,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class RiderReports {
     static final Duration FRESH_FOR = Duration.ofMinutes(3);
+    /**
+     * How long the last sighting is kept after riders stop sharing. Long enough to cover a train that's
+     * out for most of a day, so its delay keeps being applied after the one rider who shared gets off.
+     */
+    static final Duration LAST_SEEN_FOR = Duration.ofHours(12);
     private static final Duration MIN_INTERVAL = Duration.ofSeconds(3);
     private static final int MAX_TRIPS = 50_000;
     private static final int MAX_RIDERS_PER_TRIP = 200;
@@ -24,7 +29,11 @@ public class RiderReports {
     /** The bus position agreed by riders on it. */
     public record Consensus(int riders, double km, boolean gps, Instant updatedAt) {}
 
+    /** Where the vehicle was last seen by any rider, and when. */
+    public record LastSeen(double km, boolean gps, Instant at) {}
+
     private final Map<String, Map<String, Report>> byTrip = new ConcurrentHashMap<>();
+    private final Map<String, LastSeen> lastSeen = new ConcurrentHashMap<>();
 
     /** @return false if this rider reported too recently, or capacity has been reached */
     public boolean add(String tripKey, String riderId, double km, boolean gps) {
@@ -44,7 +53,21 @@ public class RiderReports {
             return false;
         }
         riders.put(riderId, new Report(km, gps, now));
+        Consensus agreed = consensus(tripKey, now);
+        if (agreed != null) {
+            lastSeen.put(tripKey, new LastSeen(agreed.km(), agreed.gps(), now));
+        }
         return true;
+    }
+
+    /** @return null when nobody has reported within {@link #LAST_SEEN_FOR} */
+    public LastSeen lastSeen(String tripKey) {
+        return lastSeen(tripKey, Instant.now());
+    }
+
+    LastSeen lastSeen(String tripKey, Instant now) {
+        LastSeen seen = lastSeen.get(tripKey);
+        return seen == null || seen.at().plus(LAST_SEEN_FOR).isBefore(now) ? null : seen;
     }
 
     /** @return null when nobody has reported recently */
@@ -76,5 +99,7 @@ public class RiderReports {
         Instant cutoff = Instant.now().minus(FRESH_FOR);
         byTrip.values().forEach(riders -> riders.values().removeIf(r -> r.at().isBefore(cutoff)));
         byTrip.values().removeIf(Map::isEmpty);
+        Instant seenCutoff = Instant.now().minus(LAST_SEEN_FOR);
+        lastSeen.values().removeIf(s -> s.at().isBefore(seenCutoff));
     }
 }

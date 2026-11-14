@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { api } from '../lib/api.js'
-import { CACHE_MS, nextDepartureSec } from '../lib/cache.js'
+import { CACHE_MS, serviceDay } from '../lib/cache.js'
 import { prefetchData, useData, useTick } from '../lib/hooks.js'
 import { defaultDeparture } from '../lib/journey.js'
 import { formatClock, formatDuration, formatKm, secondsNow } from '../lib/time.js'
@@ -99,7 +99,10 @@ function Direction({ feed, service: s, colour, onOpen }) {
   useTick(30_000)
   const { data: detail } = useData(`svc|${feed.id}|${s.serviceId}`, (signal) => api.service(feed.id, s.serviceId, signal), { cacheMs: CACHE_MS.metro })
   const nowSec = secondsNow(feed.timezone ?? 'Asia/Kolkata')
-  const firstTripId = detail ? (detail.untimedTripId ?? defaultDeparture(detail.departures, nowSec)?.tripId) : null
+  // A server that sends timing patterns lets the line screen build its trains itself; an older one
+  // doesn't, so the first train is saved ahead instead.
+  const firstTripId = detail && !detail.patterns ? (detail.untimedTripId ?? defaultDeparture(detail.departures, nowSec)?.tripId) : null
+  const status = detail ? metroStatus(detail.departures, nowSec) : { text: s.nextDepartureSec != null ? `Next ${formatClock(s.nextDepartureSec)}` : 'No more trains today' }
 
   useEffect(() => {
     if (firstTripId) prefetchData(`trip|${feed.id}|${firstTripId}`, () => api.trip(feed.id, firstTripId), CACHE_MS.metro)
@@ -114,14 +117,19 @@ function Direction({ feed, service: s, colour, onOpen }) {
     >
       <span className="block text-[11px] font-semibold tracking-wide text-ink-soft uppercase">Towards</span>
       <span className="block truncate text-sm font-bold">{s.to}</span>
-      <span className="mt-1 block text-xs text-ink-soft">{nextTrain(s, detail ? nextDepartureSec(detail.departures, nowSec) : s.nextDepartureSec)}</span>
+      <span className={`mt-1 block text-xs ${status.tone === 'warn' ? 'font-bold text-late' : status.tone === 'closed' ? 'font-semibold text-ink-soft' : 'text-ink-soft'}`}>
+        {s.timetabled === false ? 'Track live on board' : status.text}
+      </span>
     </a>
   )
 }
 
-function nextTrain(s, next) {
-  if (s.timetabled === false) return 'Track live on board'
-  if (s.departuresToday === 0) return 'No trains listed today'
-  if (next == null) return 'No more trains today'
-  return `Next ${formatClock(next)}`
+/** What a direction card says about the trains: closed and when it opens, next and last, or a last-train warning. */
+function metroStatus(departures, nowSec) {
+  const day = serviceDay(departures, nowSec)
+  if (day.state === 'none') return { text: 'No trains listed today' }
+  if (day.state === 'before') return { text: `Opens at ${formatClock(day.first)}` }
+  if (day.state === 'after') return { text: `Closed · opens ${formatClock(day.first)}`, tone: 'closed' }
+  if (day.lastSoon) return { text: day.next === day.last ? `Last train ${formatClock(day.last)}` : `Next ${formatClock(day.next)} · last ${formatClock(day.last)}`, tone: 'warn' }
+  return { text: `Next ${formatClock(day.next)} · last ${formatClock(day.last)}` }
 }

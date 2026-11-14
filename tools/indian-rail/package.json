@@ -1,0 +1,15 @@
+{
+  "name": "indian-rail-timetable",
+  "private": true,
+  "type": "module",
+  "description": "Builds the Indian Railways feed from the official Trains at a Glance timetable. See README.md.",
+  "scripts": {
+    "fetch": "node fetch.mjs",
+    "read": "node batch.mjs",
+    "build": "node build-rail.mjs && node make-gtfs.mjs"
+  },
+  "dependencies": {
+    "jpeg-js": "0.4.4",
+    "tesseract.js": "5.1.1"
+  }
+}

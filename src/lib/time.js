@@ -13,6 +13,17 @@ export function secondsNow(timezone) {
   return value('hour') * 3600 + value('minute') * 60 + value('second')
 }
 
+/** Today's day of the week in a timezone, from 1 for Monday to 7 for Sunday. */
+export function weekdayNow(timezone) {
+  const name = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, weekday: 'short' }).format(new Date())
+  return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(name) + 1
+}
+
+/** The date in a timezone some days ago, as YYYY-MM-DD: which day a train's run left. */
+export function dateInZone(timezone, daysAgo = 0) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Date.now() - daysAgo * 86400000))
+}
+
 /** The clock reading to compare with a trip: after midnight, a trip from last night needs 24h added. */
 export function clockForTrip(nowSec, startSec, durationSec) {
   return startSec + durationSec > DAY_SEC && nowSec < startSec + durationSec - DAY_SEC ? nowSec + DAY_SEC : nowSec

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { formatClock, formatDistance, formatKm } from '../lib/time.js'
-import { AT_STOP_KM, nextStopInfo } from '../lib/journey.js'
+import { AT_STOP_KM, journeyDay, nextStopInfo } from '../lib/journey.js'
 import { BellIcon, BusIcon, PlatformChip, TrainIcon } from './ui.jsx'
 
 // Up to this far behind schedule still counts as on time, as on the status card.
@@ -37,7 +37,8 @@ function busOffset({ stops, centers, km, last, phase }) {
  *        These are real, so they're shown in preference to anything worked out.
  */
 /** @param train draw a train rather than a bus, for metro lines */
-export default function Timeline({ stops, trip, journey, passedAt = {}, alarmIndex, onToggleAlarm, train = false }) {
+/** @param showDays label stops reached a day or two into the journey ("Day 2"), for long trains */
+export default function Timeline({ stops, trip, journey, passedAt = {}, alarmIndex, onToggleAlarm, train = false, showDays = false }) {
   const markerRef = useRef(null)
   const hasScrolled = useRef(false)
   const trackRef = useRef(null)
@@ -99,20 +100,24 @@ export default function Timeline({ stops, trip, journey, passedAt = {}, alarmInd
           />
         </>
       )}
-      {measured && phase === 'running' && (
+      {/* A train also keeps its icon at the destination once it has arrived. */}
+      {measured && (phase === 'running' || (showDays && phase === 'finished')) && (
         <div
           key={source}
           ref={markerRef}
           className="track-move pointer-events-none absolute z-10 flex items-center gap-2"
           style={{ left: RAIL_X - 14, top: busY - 14 }}
         >
-          <BusMarker estimated={source === 'timetable'} train={train} />
+          <BusMarker estimated={source === 'timetable' || source === 'lastSeen'} train={train} />
           {nextStop && (
             // Solid and raised, so it stays readable as it passes over the stop names.
             <span className="max-w-56 truncate rounded-lg border border-line bg-card px-2 py-1 text-xs whitespace-nowrap shadow-md">
               {nextStop.distanceKm != null && <span className="font-bold text-ink">{formatDistance(nextStop.distanceKm)}</span>}
               <span className="text-ink-soft">{nextStop.distanceKm != null ? ' to ' : 'At '}</span>
               <span className="font-semibold text-ink">{nextStop.name}</span>
+              {/* Trains often run late, so a timetable position is labelled as one. */}
+              {showDays && source === 'timetable' && <span className="text-ink-soft"> · as per timetable</span>}
+              {source === 'lastSeen' && <span className="text-ink-soft"> · estimated</span>}
             </span>
           )}
         </div>
@@ -123,11 +128,14 @@ export default function Timeline({ stops, trip, journey, passedAt = {}, alarmInd
         const isLast = i === stops.length - 1
         const atStop = phase === 'running' && i === last && km - stop.km < AT_STOP_KM
         const times = stopTimes({ i, passed, trip, journey, passedAt })
+        const day = showDays ? journeyDay(trip, i) : 0
+        const newDay = showDays && day > 0 && (i === 0 || journeyDay(trip, i - 1) !== day)
 
         return (
           <li key={`${stop.id}-${i}`} className="stop-in" style={{ animationDelay: `${Math.min(i * STAGGER_MS, MAX_STAGGER_MS)}ms` }}>
             <div className="flex items-stretch">
               <div className="w-20 shrink-0 py-2.5 pr-2 text-right text-xs leading-tight">
+                {newDay && <div className="mb-0.5 font-bold text-road-dark">Day {day + 1}</div>}
                 {times.scheduled != null && <div className="text-ink-soft">{formatClock(times.scheduled)}</div>}
                 {times.actual != null ? (
                   <div className={`mt-0.5 text-[13px] font-bold ${toneClass(times.delay)}`}>{formatClock(times.actual)}</div>
@@ -151,6 +159,10 @@ export default function Timeline({ stops, trip, journey, passedAt = {}, alarmInd
                   </div>
                   <div className="text-xs text-ink-soft">
                     {formatKm(stop.km)}
+                    {showDays && <> · {arrivesLeaves(trip, i, stops.length)}</>}
+                    {showDays && stopStatus({ i, passed, atStop, isLast, phase }) && (
+                      <span className="font-semibold text-ink"> · {stopStatus({ i, passed, atStop, isLast, phase })}</span>
+                    )}
                     {times.delay != null && <span className={`font-semibold ${toneClass(times.delay)}`}> · {delayText(times.delay)}</span>}
                   </div>
                 </div>
@@ -200,6 +212,25 @@ function stopTimes({ i, passed, trip, journey, passedAt }) {
     delay: scheduled != null && actual != null ? actual - scheduled : null,
     approx: passed && recorded == null && actual != null,
   }
+}
+
+/**
+ * When a train arrives and leaves a station, as in the railway timetable: "Dep 17:50" at the start,
+ * "Arr 21:30" at the end, "Arr 18:55 · Dep 18:57" where it waits.
+ */
+function arrivesLeaves(trip, i, count) {
+  const leaves = trip.startSec + trip.offsets[i]
+  const arrives = trip.startSec + (trip.arrivals?.[i] ?? trip.offsets[i])
+  if (i === 0) return `Dep ${formatClock(leaves)}`
+  if (i === count - 1) return `Arr ${formatClock(arrives)}`
+  return arrives === leaves ? `Dep ${formatClock(leaves)}` : `Arr ${formatClock(arrives)} · Dep ${formatClock(leaves)}`
+}
+
+/** Where the train is in relation to a station: departed, at the station, or arrived at the end. */
+function stopStatus({ passed, atStop, isLast, phase }) {
+  if (atStop) return 'At station'
+  if (isLast) return phase === 'finished' ? 'Arrived' : null
+  return passed ? 'Departed' : null
 }
 
 const toneClass = (delay) => (delay == null ? 'text-ink' : delay >= LATE_FROM_SEC ? 'text-late' : 'text-ontime')

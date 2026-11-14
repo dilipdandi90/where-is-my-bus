@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.time.Instant;
 import org.junit.jupiter.api.Test;
 
@@ -42,5 +43,16 @@ class RiderReportsTest {
         assertTrue(reports.add("t", "rider-a", 5.0, true, t0));
         assertFalse(reports.add("t", "rider-a", 6.0, true, t0.plusSeconds(1)));
         assertTrue(reports.add("t", "rider-a", 6.0, true, t0.plusSeconds(4)));
+    }
+
+    @Test
+    void theLastSightingOutlivesTheLiveReports() {
+        reports.add("t", "rider-a", 16.0, true, t0);
+        // An hour later nobody is sharing, but where it was last seen is still known.
+        Instant later = t0.plus(Duration.ofHours(1));
+        assertNull(reports.consensus("t", later));
+        assertEquals(16.0, reports.lastSeen("t", later).km());
+        assertEquals(t0, reports.lastSeen("t", later).at());
+        assertNull(reports.lastSeen("t", t0.plus(RiderReports.LAST_SEEN_FOR).plusSeconds(1)));
     }
 }

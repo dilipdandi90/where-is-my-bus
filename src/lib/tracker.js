@@ -69,7 +69,7 @@ function candidates(stops, lat, lon, toleranceKm) {
  * @param startSpeedKmh the bus's usual speed along this route, used until fixes show its real speed
  * @returns {km, at, filter, onRoute, offRouteKm}. km holds its last value while off the route.
  */
-export function updatePosition(stops, prev, fix, source, startSpeedKmh = DEFAULT_SPEED_KMH) {
+export function updatePosition(stops, prev, fix, source, startSpeedKmh = DEFAULT_SPEED_KMH, maxKmh = MAX_BUS_KMH) {
   const toleranceKm = Math.max(MIN_TOLERANCE_KM[source], fix.accuracy / 1000)
   const { found, closestOutsideKm } = candidates(stops, fix.lat, fix.lon, toleranceKm)
 
@@ -95,7 +95,7 @@ export function updatePosition(stops, prev, fix, source, startSpeedKmh = DEFAULT
   // which is close to the prediction but away from the fix. Choosing that would freeze the bus there.
   const score = (c) => Math.abs(c.km - predicted) + 2 * c.offKm
   const best = found.reduce((x, y) => (score(y) < score(x) ? y : x))
-  const furthest = prev.km + MAX_BUS_KMH * hours + toleranceKm
+  const furthest = prev.km + maxKmh * hours + toleranceKm
   const surprise = Math.min(furthest, best.km) - predicted
 
   const kmVariance = filter.kmVariance + 2 * filter.covariance * hours + filter.speedVariance * hours ** 2 + POSITION_WANDER_VARIANCE
@@ -110,7 +110,7 @@ export function updatePosition(stops, prev, fix, source, startSpeedKmh = DEFAULT
     km: Math.max(floor, Math.min(totalKm, predicted + kmGain * surprise)),
     at: fix.at,
     filter: {
-      speed: Math.max(0, Math.min(MAX_BUS_KMH, filter.speed + speedGain * surprise)),
+      speed: Math.max(0, Math.min(maxKmh, filter.speed + speedGain * surprise)),
       kmVariance: (1 - kmGain) * kmVariance,
       covariance: (1 - kmGain) * covariance,
       speedVariance: speedVariance - speedGain * covariance,

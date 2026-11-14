@@ -103,8 +103,13 @@ public record FeedData(
         }
     }
 
-    /** One scheduled departure of a service. Offsets are seconds from its first stop. */
-    public record Trip(String id, String serviceId, int startSec, int[] offsets, int weekdayMask) {
+    /**
+     * One scheduled departure of a service. Offsets are seconds from its first stop to leaving each stop.
+     *
+     * @param arrivals seconds from the first stop to arriving at each stop, or null when every stop's
+     *        arrival and departure are the same (most buses), to save memory
+     */
+    public record Trip(String id, String serviceId, int startSec, int[] offsets, int weekdayMask, int[] arrivals) {
         public int durationSec() {
             return offsets[offsets.length - 1];
         }
@@ -112,6 +117,15 @@ public record FeedData(
         /** @param isoWeekday 1 for Monday to 7 for Sunday */
         public boolean runsOn(int isoWeekday) {
             return (weekdayMask & (1 << (isoWeekday - 1))) != 0;
+        }
+
+        /**
+         * Whether it calls at a stop on a given day. A long train reaches later stops a day or two after
+         * leaving its first one, so a Monday train is at a second-day stop on Tuesday.
+         */
+        public boolean callsOn(int stopIndex, int isoWeekday) {
+            int shift = (startSec + offsets[stopIndex]) / 86400;
+            return runsOn(Math.floorMod(isoWeekday - 1 - shift, 7) + 1);
         }
     }
 

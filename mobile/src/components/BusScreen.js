@@ -18,9 +18,16 @@ import {
   formatDistance,
   formatDuration,
   formatKm,
+  currentRun,
   isMetro,
+  isRail,
+  maxSpeedKmh,
   nearestDeparture,
   secondsNow,
+  dateInZone,
+  weekdayNow,
+  serviceDay,
+  tripFromService,
   timetableCacheMs,
   wordsFor,
 } from '../lib/shared.js'
@@ -64,6 +71,9 @@ export default function BusScreen({ feedId, serviceId, initialTripId }) {
   const feed = feeds?.find((f) => f.id === feedId)
   const words = wordsFor(feed)
   const metro = isMetro(feed)
+  const rail = isRail(feed)
+  // Which day's run of a train the rider is looking at: 0 today, 1 yesterday… (see currentRun).
+  const [pickedRun, setPickedRun] = useState(null)
 
   const [onBus, setOnBus] = useState(false)
   const [trackBy, setTrackBy] = useState(null)
@@ -86,7 +96,7 @@ export default function BusScreen({ feedId, serviceId, initialTripId }) {
   const { position, method, error: locationError, tooVague, accuracy, fixRef } = usePhonePosition(service?.stops, mode, usualSpeed(service), (km) => {
     const match = nearestDeparture(service.departures, service.km, km, nowSec)
     if (match) setMatchedTripId(match.departure.tripId)
-  })
+  }, maxSpeedKmh(feed))
 
   const { buses, passings, checked: liveChecked } = useLiveBuses(feedId, serviceId, refreshCount, service, Boolean(feed?.hasLiveBuses))
   const waitingForLive = Boolean(feed?.hasLiveBuses) && !liveChecked
@@ -96,15 +106,27 @@ export default function BusScreen({ feedId, serviceId, initialTripId }) {
   const autoBus = mode === 'off' && !pickedTripId && running.length > 0 ? running.reduce((a, b) => (b.km > a.km ? b : a)) : null
   const autoBusTrip = autoBus ? nearestDeparture(service.departures, service.km, autoBus.km, nowSec, Infinity)?.departure.tripId : null
   const tripId = pickedTripId ?? (mode !== 'off' ? matchedTripId : null) ?? autoBusTrip ?? fallback?.tripId ?? service?.untimedTripId ?? null
-  const { data: trip, error: tripError, retry: retryTrip } = useData(tripId && `trip|${feedId}|${tripId}`, (signal) => api.trip(feedId, tripId, signal), { cacheMs: timetableCacheMs(feed) })
+  // Built from the service when it can be, which needs no request: before, every new departure (a
+  // metro train every few minutes) meant waiting on the network. Asked for only when it can't.
+  const localTrip = tripFromService(service, tripId)
+  const { data: fetchedTrip, error: tripError, retry: retryTrip } = useData(!localTrip && tripId ? `trip|${feedId}|${tripId}` : null, (signal) => api.trip(feedId, tripId, signal), {
+    cacheMs: timetableCacheMs(feed),
+  })
+  const trip = localTrip ?? fetchedTrip
 
-  const live = useRiderStatus(feedId, tripId, refreshCount)
-  useRiderSharing({ feedId, tripId, mode, enabled: helping, fixRef })
+  const weekday = weekdayNow(service?.timezone ?? 'Asia/Kolkata')
+  const departure = service?.departures.find((d) => d.tripId === tripId)
+  const run = rail && departure ? (pickedRun ?? currentRun(departure, nowSec, weekday)) : null
+  // Reports for a train are kept per day's run, as runs from different days can be out at once.
+  const runDate = rail && run != null ? dateInZone(service?.timezone ?? 'Asia/Kolkata', run) : null
+  const live = useRiderStatus(feedId, tripId, refreshCount, runDate)
+  useRiderSharing({ feedId, tripId, mode, enabled: helping, fixRef, runDate })
   const family = useFamilyShare({ feedId, tripId, tracking: mode !== 'off', fixRef, source: mode === 'gps' ? 'gps' : 'cell', destination: service?.to, words })
 
   const phoneKm = position?.onRoute ? position.km : null
   const bus = autoBus ?? assigned.get(tripId) ?? null
-  const journey = service && trip?.tripId === tripId ? describeJourney({ stops: service.stops, trip, nowSec, phoneKm, bus, live, mode, timetabled }) : null
+  const journey =
+    service && trip?.tripId === tripId ? describeJourney({ stops: service.stops, trip, nowSec, phoneKm, bus, live, mode, timetabled, startedDaysAgo: rail ? run : null }) : null
   const stopAlarm = useStopAlarm(service?.stops, journey)
 
   // Phones pause apps once the screen locks, which would stop tracking and sharing.
@@ -148,7 +170,7 @@ export default function BusScreen({ feedId, serviceId, initialTripId }) {
           <Text style={styles.topTitle} numberOfLines={1}>{service.to}</Text>
           <Text style={styles.topSub} numberOfLines={1}>
             from {service.from}
-            {service.operator ? ` · ${service.operator}` : ''}
+            {rail ? ` · ${service.label}` : service.operator ? ` · ${service.operator}` : ''}
             {feed?.numbersAreCodes ? ` · Code ${service.number}` : ''}
           </Text>
         </View>
@@ -205,9 +227,11 @@ export default function BusScreen({ feedId, serviceId, initialTripId }) {
 
         <LocationStatus mode={mode} error={locationError} tooVague={tooVague} accuracy={accuracy} position={position} words={words} />
         {timetabled && service.departures.length === 0 && <Message title="No departures listed today">{`This feed doesn't show this ${words.bus} running today.`}</Message>}
-        {journey && !waitingForLive && <StatusCard service={service} journey={journey} bus={bus} method={method} accuracy={accuracy} nowSec={nowSec} words={words} />}
+        {metro && timetabled && <LineHours service={service} nowSec={nowSec} scheme={scheme} />}
+        {journey && !waitingForLive && <StatusCard service={service} journey={journey} bus={bus} method={method} accuracy={accuracy} nowSec={nowSec} words={words} live={live} />}
 
-        {timetabled && selectedDeparture && (
+        {rail && departure && <RunPicker departure={departure} run={run} weekday={weekday} from={service.from} onPick={setPickedRun} scheme={scheme} />}
+        {timetabled && selectedDeparture && (!rail || service.departures.length > 1) && (
           <Press onPress={() => setPicking(true)} style={styles.departure}>
             <View style={{ flex: 1 }}>
               <Text style={styles.small}>Departure</Text>
@@ -240,7 +264,7 @@ export default function BusScreen({ feedId, serviceId, initialTripId }) {
               <Segmented options={[{ value: 'stops', label: words.Stops }, { value: 'map', label: 'Map' }]} value={view} onChange={setView} />
             </View>
             {view === 'map' ? (
-              <RouteMap stops={service.stops} journey={journey} scheme={scheme} metro={metro} />
+              <RouteMap stops={service.stops} journey={journey} scheme={scheme} metro={metro} train={metro || rail} />
             ) : (
               <View onLayout={(e) => (timelineTop.current = e.nativeEvent.layout.y)}>
                 <Timeline
@@ -251,7 +275,8 @@ export default function BusScreen({ feedId, serviceId, initialTripId }) {
                   alarmIndex={stopAlarm.alarm}
                   onToggleAlarm={stopAlarm.toggle}
                   scheme={scheme}
-                  train={metro}
+                  train={metro || rail}
+                  showDays={rail}
                   // Glides to the vehicle once, when the screen opens.
                   onBusY={(y) => setTimeout(() => scroll.current?.scrollTo({ y: Math.max(0, timelineTop.current + y - 260), animated: true }), 350)}
                 />
@@ -308,6 +333,87 @@ export default function BusScreen({ feedId, serviceId, initialTripId }) {
   )
 }
 
+/**
+ * A metro line's hours in plain words: closed and when it opens, the next and last train, or a
+ * warning when the last train is near, so nobody waits at a closed station.
+ */
+function LineHours({ service, nowSec, scheme }) {
+  const day = serviceDay(service.departures, nowSec)
+  if (day.state === 'none') return null
+  const from = service.from
+  let tone = 'info'
+  let title
+  let detail
+  if (day.state === 'before') {
+    title = `Opens at ${formatClock(day.first)}`
+    detail = `First train from ${from} at ${formatClock(day.first)}. Last train at ${formatClock(day.last)}.`
+  } else if (day.state === 'after') {
+    tone = 'closed'
+    title = 'Closed for today'
+    detail = `Opens tomorrow at ${formatClock(day.first)}. The last train from ${from} left at ${formatClock(day.last)}.`
+  } else if (day.lastSoon) {
+    tone = 'warn'
+    title = `Last train at ${formatClock(day.last)}`
+    detail = day.next === day.last ? `This is the last train from ${from} today.` : `Next train at ${formatClock(day.next)}. After the last one, it opens tomorrow at ${formatClock(day.first)}.`
+  } else {
+    title = `Open until ${formatClock(day.last)}`
+    detail = `Next train from ${from} at ${formatClock(day.next)}. Last train at ${formatClock(day.last)}.`
+  }
+  const bg = tone === 'closed' ? '#eef0f5' : tone === 'warn' ? '#fdecea' : scheme.tint
+  const fg = tone === 'closed' ? colors.inkSoft : tone === 'warn' ? colors.late : colors.ink
+  return (
+    <View style={[styles.hours, { backgroundColor: bg }]} accessibilityRole="summary">
+      <Text style={{ fontWeight: '800', fontSize: 15, color: fg }}>
+        {tone === 'closed' ? '● ' : tone === 'warn' ? '⚠ ' : ''}
+        {title}
+      </Text>
+      <Text style={{ marginTop: 2, fontSize: 13, color: colors.ink }}>{detail}</Text>
+    </View>
+  )
+}
+
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+/** A train's running days in words: "Daily", "Except Thu" or "Mon, Wed, Fri". */
+function runningDays(days) {
+  if ((days & 0b1111111) === 0b1111111) return 'Daily'
+  const on = WEEKDAYS.filter((_, d) => (days >> d) & 1)
+  const off = WEEKDAYS.filter((_, d) => !((days >> d) & 1))
+  return off.length <= 2 ? `Except ${off.join(', ')}` : on.join(', ')
+}
+
+/**
+ * Picks which day's run of a train to show, as a train can be out for days: the one that left
+ * today, yesterday or the day before. Only days it actually runs are offered.
+ */
+function RunPicker({ departure, run, weekday, from, onPick, scheme }) {
+  const dayIndex = (k) => (((weekday - 1 - k) % 7) + 7) % 7
+  const choices = [0, 1, 2].filter((k) => (departure.days >> dayIndex(k)) & 1)
+  const label = (k) => ['Today', 'Yesterday', '2 days ago'][k]
+  return (
+    <View style={styles.status}>
+      <Text style={styles.small}>
+        Runs: <Text style={{ fontWeight: '700', color: colors.ink }}>{runningDays(departure.days)}</Text> · leaves {from} at {formatClock(departure.startSec)}
+      </Text>
+      {choices.length > 0 && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }} accessibilityRole="radiogroup">
+          <Text style={styles.small}>Left</Text>
+          {choices.map((k) => {
+            const on = run === k
+            return (
+              <Press key={k} onPress={() => onPick(k)} accessibilityRole="radio" accessibilityState={{ checked: on }} style={[styles.chip, on && { backgroundColor: scheme.roadDark, borderColor: scheme.roadDark }]}>
+                <Text style={{ fontWeight: '600', fontSize: 12, color: on ? '#fff' : colors.inkSoft }}>
+                  {label(k)} {WEEKDAYS[dayIndex(k)]}
+                </Text>
+              </Press>
+            )
+          })}
+        </View>
+      )}
+    </View>
+  )
+}
+
 function TopBar({ insets, children }) {
   return (
     <View style={[styles.top, { paddingTop: insets.top + 8 }]}>
@@ -330,7 +436,7 @@ function LocationStatus({ mode, error, tooVague, accuracy, position, words }) {
   return message ? <Text style={[styles.hint, { backgroundColor: colors.tint, color: colors.ink, fontSize: 14 }]}>{message}</Text> : null
 }
 
-function StatusCard({ service, journey, bus, method, accuracy, nowSec, words }) {
+function StatusCard({ service, journey, bus, method, accuracy, nowSec, words, live }) {
   const { phase, source, last, delaySec, eta, startsInSec } = journey
   const stops = service.stops
   const next = stops[last + 1]
@@ -359,6 +465,7 @@ function StatusCard({ service, journey, bus, method, accuracy, nowSec, words }) 
     cell: method === 'tower' ? 'Live from nearby cell towers, approximate' : 'Live from network location, approximate',
     bus: `Live from bus GPS · ${bus?.plate} · ${formatAge(bus?.ageSec ?? 0)}`,
     riders: `Live from riders on this ${words.bus}`,
+    lastSeen: `Last seen by a rider ${formatAge(live?.lastAgeSec ?? 0)} · moved on from there at its delay, estimated`,
   }[source]
 
   return (
@@ -375,7 +482,7 @@ function StatusCard({ service, journey, bus, method, accuracy, nowSec, words }) 
         )}
       </View>
       {sourceText && (
-        <Text style={{ marginTop: 8, fontSize: 12, fontWeight: '500', color: colors.ontime }}>
+        <Text style={{ marginTop: 8, fontSize: 12, fontWeight: '500', color: source === 'lastSeen' ? colors.inkSoft : colors.ontime }}>
           ● {sourceText}
           {(source === 'gps' || source === 'cell') && accuracy != null ? ` (to about ${accuracy < 1000 ? `${Math.round(accuracy / 10) * 10 || 10} m` : `${(accuracy / 1000).toFixed(1)} km`})` : ''}
         </Text>
@@ -447,6 +554,7 @@ const styles = StyleSheet.create({
   alarmOk: { backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 6, paddingHorizontal: 12, paddingVertical: 6 },
   status: { backgroundColor: colors.card, paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.line },
   delay: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  hours: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.line },
   departure: { flexDirection: 'row', alignItems: 'center', margin: 16, marginBottom: 4, backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.line, padding: 14 },
   helpRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.line },
   smallButton: { backgroundColor: colors.ink, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7, alignItems: 'center' },

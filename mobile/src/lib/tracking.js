@@ -36,13 +36,15 @@ export const readCells = () => CellTowers?.getCells() ?? Promise.resolve([])
  * @param onFirstOnRoute called once per mode with the km of the first fix on the route
  * @returns {position, method, error, tooVague, accuracy, fixRef}
  */
-export function usePhonePosition(stops, mode, speedKmh, onFirstOnRoute) {
+export function usePhonePosition(stops, mode, speedKmh, onFirstOnRoute, maxKmh = 100) {
   const tracking = stops != null && (mode === 'gps' || mode === 'cell')
   const [state, setState] = useState({ mode: null })
   const fixRef = useRef(null)
   const notifyFirst = useEffectEvent((km) => onFirstOnRoute(km))
   const allStops = useEffectEvent(() => stops)
   const usualSpeed = useEffectEvent(() => speedKmh)
+  // Trains run faster than buses, so faster movement isn't mistaken for a GPS jump.
+  const topSpeed = useEffectEvent(() => maxKmh)
 
   useEffect(() => {
     if (!tracking) return undefined
@@ -55,7 +57,7 @@ export function usePhonePosition(stops, mode, speedKmh, onFirstOnRoute) {
 
     const accept = (fix, method) => {
       const hadPosition = position?.km != null
-      position = updatePosition(allStops(), position, fix, mode, usualSpeed())
+      position = updatePosition(allStops(), position, fix, mode, usualSpeed(), topSpeed())
       fixRef.current = position.onRoute ? fix : null
       if (!hadPosition && position.km != null) notifyFirst(position.km)
       setState({ mode, position, method, accuracy: fix.accuracy })

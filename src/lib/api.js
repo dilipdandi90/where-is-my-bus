@@ -44,8 +44,9 @@ export const api = {
   service: (feed, id, signal) => get(`/${feed}/services/${enc(id)}`, signal),
   trip: (feed, id, signal) => get(`/${feed}/trip?id=${enc(id)}`, signal),
   liveBuses: (feed, id, signal) => get(`/${feed}/services/${enc(id)}/buses`, signal),
-  live: (feed, id, signal) => get(`/${feed}/trip/live?id=${enc(id)}`, signal),
-  report: (feed, id, body) => post(`/feeds/${feed}/trip/reports?id=${enc(id)}`, body),
+  // run is the date a train's run left, so reports from different days' runs stay apart.
+  live: (feed, id, signal, run) => get(`/${feed}/trip/live?id=${enc(id)}${run ? `&run=${run}` : ''}`, signal),
+  report: (feed, id, body, run) => post(`/feeds/${feed}/trip/reports?id=${enc(id)}${run ? `&run=${run}` : ''}`, body),
   createShare: async (feed, tripId) => (await post('/shares', { feed, tripId })).json(),
   share: async (token, signal) => (await request(`/shares/${enc(token)}`, { signal })).json(),
   sharePosition: (token, body) => post(`/shares/${enc(token)}/position`, body),

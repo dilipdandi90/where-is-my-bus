@@ -6,7 +6,7 @@ import { formatClock, formatDuration, formatKm, secondsNow } from '../lib/time.j
 import { track } from '../lib/usage.js'
 import FeedNotice from './FeedNotice.jsx'
 import MetroLines from './MetroLines.jsx'
-import { count, isMetro, lineColours, wordsFor } from '../lib/words.js'
+import { count, isMetro, isRail, lineColours, modeOf, wordsFor } from '../lib/words.js'
 import { BusIcon, ErrorMessage, Message, PinIcon, PlatformChip, ReloadIcon, SearchIcon, ServicePlate, SwapIcon, TrainIcon } from './ui.jsx'
 
 const MAX_RECENT = 6
@@ -100,47 +100,40 @@ function shortName(feed) {
  * Bus or metro first, then where. Two small rows rather than a tile per region, so the search below
  * stays on screen. The last region picked for each is remembered, so switching back is one tap.
  */
+const MODES = [
+  ['bus', 'Bus', BusIcon],
+  ['metro', 'Metro', TrainIcon],
+  ['rail', 'Train', TrainIcon],
+]
+
 function FeedPicker({ feeds, selected, onSelect }) {
-  const [lastBus, setLastBus] = useStoredState('wimb.lastBusFeed', null)
-  const [lastMetro, setLastMetro] = useStoredState('wimb.lastMetroFeed', null)
-  const metro = isMetro(selected)
-  const busFeeds = feeds.filter((f) => !isMetro(f))
-  const metroFeeds = feeds.filter((f) => isMetro(f))
-  const shown = metro ? metroFeeds : busFeeds
+  // The last feed picked in each mode, so switching back is one tap.
+  const [lastByMode, setLastByMode] = useStoredState('wimb.lastFeedByMode', {})
+  const mode = modeOf(selected)
+  const shown = feeds.filter((f) => modeOf(f) === mode)
 
   const pick = (f) => {
-    if (isMetro(f)) setLastMetro(f.id)
-    else setLastBus(f.id)
+    setLastByMode({ ...lastByMode, [modeOf(f)]: f.id })
     onSelect(f.id)
   }
-  const switchTo = (toMetro) => {
-    if (toMetro === metro) return
-    // Remembers where they were, even if it was picked before this switch existed.
-    if (selected) {
-      if (metro) setLastMetro(selected.id)
-      else setLastBus(selected.id)
-    }
-    const list = toMetro ? metroFeeds : busFeeds
-    const remembered = list.find((f) => f.id === (toMetro ? lastMetro : lastBus))
+  const switchTo = (to) => {
+    if (to === mode) return
+    const list = feeds.filter((f) => modeOf(f) === to)
+    const remembered = list.find((f) => f.id === lastByMode[to])
     if (list.length > 0) pick(remembered ?? list[0])
   }
+  const modes = MODES.filter(([m]) => feeds.some((f) => modeOf(f) === m))
 
   return (
     <div className="mt-3.5">
-      <div role="tablist" aria-label="Bus or metro" className="grid grid-cols-2 gap-1 rounded-2xl bg-paper/10 p-1">
-        {[
-          [false, 'Bus', BusIcon, busFeeds.length],
-          [true, 'Metro', TrainIcon, metroFeeds.length],
-        ].map(([isMetroTab, label, Icon, available]) => (
+      <div role="tablist" aria-label="Bus, metro or train" className="grid gap-1 rounded-2xl bg-paper/10 p-1" style={{ gridTemplateColumns: `repeat(${modes.length}, minmax(0, 1fr))` }}>
+        {modes.map(([m, label, Icon]) => (
           <button
-            key={label}
+            key={m}
             role="tab"
-            aria-selected={metro === isMetroTab}
-            disabled={available === 0}
-            onClick={() => switchTo(isMetroTab)}
-            className={`flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-bold transition-colors disabled:opacity-40 ${
-              metro === isMetroTab ? 'bg-card text-ink shadow-sm' : 'text-paper/80'
-            }`}
+            aria-selected={mode === m}
+            onClick={() => switchTo(m)}
+            className={`flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-bold transition-colors ${mode === m ? 'bg-card text-ink shadow-sm' : 'text-paper/80'}`}
           >
             <Icon className="size-5" />
             {label}
@@ -149,7 +142,7 @@ function FeedPicker({ feeds, selected, onSelect }) {
       </div>
 
       {shown.length > 1 && (
-        <div role="radiogroup" aria-label={metro ? 'Metro' : 'Region'} className="mt-2.5 flex gap-1.5">
+        <div role="radiogroup" aria-label="Region" className="mt-2.5 flex gap-1.5">
           {shown.map((f) => (
             <button
               key={f.id}
@@ -256,6 +249,7 @@ const stagger = (i) => ({ animationDelay: `${Math.min(i * 45, 400)}ms` })
 
 function ServiceCard({ feed, service: s, onOpen, children }) {
   const metro = isMetro(feed)
+  const rail = isRail(feed)
   const words = wordsFor(feed)
   return (
     <a
@@ -271,11 +265,13 @@ function ServiceCard({ feed, service: s, onOpen, children }) {
           {metro ? (
             <span className="text-xs font-semibold text-ink-soft">{s.label}</span>
           ) : (
-            s.operator && <span className="text-xs font-semibold text-ink-soft">{s.operator}</span>
+            !rail && s.operator && <span className="truncate text-xs font-semibold text-ink-soft">{s.operator}</span>
           )}
         </div>
       )}
-      <p className="font-semibold">
+      {/* Trains are known by name (Hutatma Express), so it leads, with the route underneath. */}
+      {rail && <p className="font-semibold">{s.label}</p>}
+      <p className={rail ? 'mt-0.5 text-sm text-ink-soft' : 'font-semibold'}>
         {s.from} <span className="text-ink-soft">→</span> {s.to}
       </p>
       {feed.numbersAreCodes && (
@@ -298,7 +294,7 @@ function ServiceCard({ feed, service: s, onOpen, children }) {
           ) : s.departuresToday === 0 ? (
             'No departures listed today'
           ) : s.nextDepartureSec != null ? (
-            `Next at ${formatClock(s.nextDepartureSec)} · ${s.departuresToday} today`
+            rail ? `Next at ${formatClock(s.nextDepartureSec)} today` : `Next at ${formatClock(s.nextDepartureSec)} · ${s.departuresToday} today`
           ) : (
             'No more in our timetable today'
           )}
@@ -483,7 +479,7 @@ function TimetableSection({ title, subtitle, feed, rows, nextIndex, nowSec, onOp
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-2">
                     {!feed.numbersAreCodes && <ServicePlate metro={metro} service={r.service} />}
-                    <span className="truncate text-sm font-semibold">{feed.numbersAreCodes ? label : `to ${r.service.to}`}</span>
+                    <span className="truncate text-sm font-semibold">{feed.numbersAreCodes ? label : isRail(feed) ? r.service.label : `to ${r.service.to}`}</span>
                   </span>
                   <span className="mt-0.5 block truncate text-xs text-ink-soft">
                     {formatDuration(r.minutes)} · {formatKm(r.km)}

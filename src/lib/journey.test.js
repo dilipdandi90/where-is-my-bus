@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { assignBuses, atRouteEnd, defaultDeparture, departureWithBus, describeJourney, nextStopInfo, pointAtKm } from './journey.js'
+import { assignBuses, atRouteEnd, currentRun, defaultDeparture, departureWithBus, describeJourney, journeyDay, nextStopInfo, pointAtKm } from './journey.js'
 import { clockForTrip, formatClock, formatDistance, formatDuration } from './time.js'
 
 const stops = [
@@ -205,4 +205,45 @@ test('a line with no timetable is only placed by a live position, and never give
   assert.equal(tracked.source, 'gps')
   assert.equal(tracked.delaySec, null)
   assert.deepEqual(tracked.eta, [null, null, null])
+})
+
+test('a train is shown on the run that is on its way now, even if it left yesterday', () => {
+  // Leaves 20:00 daily, takes 30 hours.
+  const daily = { startSec: 20 * 3600, durationSec: 30 * 3600, days: 0b1111111 }
+  assert.equal(currentRun(daily, 10 * 3600, 3), 1) // 10:00 Wednesday: Tuesday's run is on its way
+  assert.equal(currentRun(daily, 21 * 3600, 3), 0) // 21:00: today's has left
+  // Leaves only on Mondays (bit 0), 20:00, 30 hours.
+  const monday = { startSec: 20 * 3600, durationSec: 30 * 3600, days: 0b0000001 }
+  assert.equal(currentRun(monday, 10 * 3600, 2), 1) // Tuesday 10:00: Monday's run
+  assert.equal(currentRun(monday, 10 * 3600, 4), 3) // Thursday: last Monday's, finished
+})
+
+test('stops reached after midnight are on day 2 of the journey', () => {
+  const trip = { startSec: 22 * 3600, offsets: [0, 3600, 3 * 3600, 28 * 3600] }
+  assert.deepEqual([0, 1, 2, 3].map((i) => journeyDay(trip, i)), [0, 0, 1, 2])
+})
+
+test('a run that left days ago is placed by its own clock', () => {
+  const stops = [{ km: 0 }, { km: 100 }, { km: 200 }]
+  const trip = { startSec: 20 * 3600, offsets: [0, 10 * 3600, 20 * 3600] }
+  // 06:00 today, on yesterday's 20:00 run: 10 hours in, at the middle station.
+  const j = describeJourney({ stops, trip, nowSec: 6 * 3600, phoneKm: null, bus: null, live: null, mode: 'off', startedDaysAgo: 1 })
+  assert.equal(j.phase, 'running')
+  assert.equal(j.km, 100)
+})
+
+test('a late train stays late after the rider who saw it stops sharing', () => {
+  // Pune 0 km at 02:20, Daund 75 km at 03:35 (75 min, so 1 km a minute).
+  const stops = [{ km: 0 }, { km: 75 }, { km: 175 }]
+  const trip = { startSec: 2 * 3600 + 20 * 60, offsets: [0, 75 * 60, 175 * 60] }
+  const now = 3 * 3600 + 19 * 60 // 03:19: on time it would be at km 59
+  // Seen at km 16 (Loni) just now: 43 minutes late.
+  const j = describeJourney({ stops, trip, nowSec: now, phoneKm: null, bus: null, live: { riders: 0, lastKm: 16, lastAgeSec: 0 }, mode: 'off' })
+  assert.equal(j.source, 'lastSeen')
+  assert.equal(j.km, 16)
+  assert.equal(Math.round(j.delaySec / 60), 43)
+  // Twenty minutes later, nobody has shared since: it has moved on 20 km and is still 43 minutes late.
+  const later = describeJourney({ stops, trip, nowSec: now + 1200, phoneKm: null, bus: null, live: { riders: 0, lastKm: 16, lastAgeSec: 1200 }, mode: 'off' })
+  assert.equal(Math.round(later.km), 36)
+  assert.equal(Math.round(later.delaySec / 60), 43)
 })

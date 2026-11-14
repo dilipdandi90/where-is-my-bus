@@ -1,15 +1,16 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
-import { timetableCacheMs } from '../lib/cache.js'
+import { serviceDay, timetableCacheMs } from '../lib/cache.js'
+import { tripFromService } from '../lib/trips.js'
 import { canReadTowers, readCells } from '../lib/cells.js'
 import { track } from '../lib/usage.js'
 import { useStopAlarm } from '../lib/alarm.js'
 import { useFamilyShare } from '../lib/familyShare.js'
 import { useData, usePhonePosition, useTick, useWakeLock } from '../lib/hooks.js'
-import { assignBuses, atRouteEnd, defaultDeparture, describeJourney } from '../lib/journey.js'
-import { formatAge, formatClock, formatDuration, formatKm, secondsNow } from '../lib/time.js'
+import { assignBuses, atRouteEnd, currentRun, defaultDeparture, describeJourney } from '../lib/journey.js'
+import { dateInZone, formatAge, formatClock, formatDuration, formatKm, secondsNow, weekdayNow } from '../lib/time.js'
 import { nearestDeparture } from '../lib/tracker.js'
-import { isMetro, lineColours, wordsFor } from '../lib/words.js'
+import { isMetro, isRail, lineColours, maxSpeedKmh, wordsFor } from '../lib/words.js'
 import DeparturePicker from './DeparturePicker.jsx'
 import FeedNotice from './FeedNotice.jsx'
 import LiveBuses from './LiveBuses.jsx'
@@ -73,6 +74,9 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
   const nowSec = secondsNow(service?.timezone ?? 'Asia/Kolkata')
   const words = wordsFor(feed)
   const metro = isMetro(feed)
+  const rail = isRail(feed)
+  // Which day's run of a train the rider is looking at: 0 today, 1 yesterday… (see currentRun).
+  const [pickedRun, setPickedRun] = useState(null)
   // A line with no published timetable still has stations and can be tracked live, but has no departures.
   const timetabled = service?.timetabled !== false
 
@@ -80,7 +84,7 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
   const { position, method, error: locationError, tooVague, accuracy, fixRef } = usePhonePosition(service?.stops, mode, usualSpeed(service), (km) => {
     const match = nearestDeparture(service.departures, service.km, km, nowSec)
     if (match) setMatchedTripId(match.departure.tripId)
-  })
+  }, maxSpeedKmh(feed))
 
   const { buses, passings, checked: liveChecked } = useLiveBuses(feedId, serviceId, refreshCount, service)
   // Where buses report GPS, wait for the first answer before drawing the journey. Otherwise the
@@ -96,18 +100,33 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
   const autoBus = mode === 'off' && !pickedTripId && !followedPlate && running.length > 0 ? running.reduce((a, b) => (b.km > a.km ? b : a)) : null
   const autoBusTrip = autoBus ? nearestDeparture(service.departures, service.km, autoBus.km, nowSec, Infinity)?.departure.tripId : null
   const tripId = pickedTripId ?? (mode !== 'off' ? matchedTripId : null) ?? autoBusTrip ?? fallback?.tripId ?? service?.untimedTripId ?? null
-  const { data: trip, error: tripError, retry: retryTrip, refreshing: tripRefreshing } = useData(tripId && `trip|${feedId}|${tripId}`, (signal) => api.trip(feedId, tripId, signal), { cacheMs: timetableCacheMs(feed) })
+  // Built from the service when it can be, which needs no request: before, every new departure (a
+  // metro train every few minutes) meant waiting on the network. Asked for only when it can't.
+  const localTrip = tripFromService(service, tripId)
+  const {
+    data: fetchedTrip,
+    error: tripError,
+    retry: retryTrip,
+    refreshing: tripRefreshing,
+  } = useData(!localTrip && tripId ? `trip|${feedId}|${tripId}` : null, (signal) => api.trip(feedId, tripId, signal), { cacheMs: timetableCacheMs(feed) })
+  const trip = localTrip ?? fetchedTrip
 
-  const live = useLivePolling(feedId, tripId, mode, refreshCount)
+  const weekday = weekdayNow(service?.timezone ?? 'Asia/Kolkata')
+  const departure = service?.departures.find((d) => d.tripId === tripId)
+  const run = rail && departure ? (pickedRun ?? currentRun(departure, nowSec, weekday)) : null
+  // Reports for a train are kept per day's run, as runs from different days can be out at once.
+  const runDate = rail && run != null ? dateInZone(service?.timezone ?? 'Asia/Kolkata', run) : null
+
+  const live = useLivePolling(feedId, tripId, mode, refreshCount, runDate)
   const [sharing, setSharing] = useState(false)
-  useSharing({ feedId, tripId, mode, enabled: sharing, fixRef })
+  useSharing({ feedId, tripId, mode, enabled: sharing, fixRef, runDate })
 
   const phoneKm = position?.onRoute ? position.km : null
   const followed = buses.find((b) => b.plate === followedPlate)
   const bus = followed ?? autoBus ?? assigned.get(tripId) ?? null
   const journey =
     service && trip?.tripId === tripId
-      ? describeJourney({ stops: service.stops, trip, nowSec, phoneKm, bus, live, mode, timetabled })
+      ? describeJourney({ stops: service.stops, trip, nowSec, phoneKm, bus, live, mode, timetabled, startedDaysAgo: rail ? run : null })
       : null
 
   const stopAlarm = useStopAlarm(service?.stops, journey)
@@ -150,7 +169,7 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
               <div className="truncate font-semibold">{service.to}</div>
               <div className="truncate text-xs text-paper/70">
                 from {service.from}
-                {service.operator && ` · ${service.operator}`}
+                {rail ? ` · ${service.label}` : service.operator && ` · ${service.operator}`}
                 {feed?.numbersAreCodes && ` · Code ${service.number}`}
               </div>
             </div>
@@ -188,10 +207,11 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
           {firing && <AlarmBanner stop={service.stops[alarm]} onDismiss={stopAlarm.dismiss} />}
 
           <LocationStatus mode={mode} error={locationError} tooVague={tooVague} accuracy={accuracy} position={position} words={words} />
-          {journey && !waitingForLive && <StatusCard service={service} journey={journey} bus={bus} method={method} accuracy={accuracy} nowSec={nowSec} words={words} />}
+          {metro && timetabled && <LineHours service={service} nowSec={nowSec} />}
+          {journey && !waitingForLive && <StatusCard service={service} journey={journey} bus={bus} method={method} accuracy={accuracy} nowSec={nowSec} words={words} live={live} />}
 
           {/* Community timetables often stop well before the real last bus, so don't imply service has ended. */}
-          {journey && !bus && journey.source === 'timetable' && journey.phase === 'finished' && (
+          {!metro && !rail && journey && !bus && journey.source === 'timetable' && journey.phase === 'finished' && (
             <p className="border-b border-line bg-tint px-4 py-2.5 text-sm text-ink">
               {buses.length > 0
                 ? `Today's timetable has ended, but ${buses.length} live ${buses.length === 1 ? 'bus is' : 'buses are'} running now — see the list below.`
@@ -201,7 +221,8 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
             </p>
           )}
 
-          {timetabled && (
+          {rail && departure && <RunPicker departure={departure} run={run} weekday={weekday} from={service.from} onPick={setPickedRun} />}
+          {timetabled && (!rail || service.departures.length > 1) && (
           <DeparturePicker
             departures={service.departures}
             selectedId={tripId}
@@ -262,6 +283,8 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
               <JourneyView
                 stopsLabel={words.Stops}
                 lineColor={metro ? service.color : null}
+                train={metro || rail}
+                showDays={rail}
                 stops={service.stops}
                 trip={trip}
                 journey={journey}
@@ -282,6 +305,87 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
 
       <RefreshButton words={words} onClick={refresh} refreshing={serviceRefreshing || tripRefreshing} />
     </div>
+  )
+}
+
+/**
+ * A metro line's hours in plain words: closed and when it opens, the next and last train, or a
+ * warning when the last train is near, so nobody waits at a closed station.
+ */
+function LineHours({ service, nowSec }) {
+  const day = serviceDay(service.departures, nowSec)
+  if (day.state === 'none') return null
+  const from = service.from
+  let tone = ''
+  let title
+  let detail
+  if (day.state === 'before') {
+    title = `Opens at ${formatClock(day.first)}`
+    detail = `First train from ${from} at ${formatClock(day.first)}. Last train at ${formatClock(day.last)}.`
+  } else if (day.state === 'after') {
+    tone = 'closed'
+    title = 'Closed for today'
+    detail = `Opens tomorrow at ${formatClock(day.first)}. The last train from ${from} left at ${formatClock(day.last)}.`
+  } else if (day.lastSoon) {
+    tone = 'warn'
+    title = `Last train at ${formatClock(day.last)}`
+    detail = day.next === day.last ? `This is the last train from ${from} today.` : `Next train at ${formatClock(day.next)}. After the last one, it opens tomorrow at ${formatClock(day.first)}.`
+  } else {
+    title = `Open until ${formatClock(day.last)}`
+    detail = `Next train from ${from} at ${formatClock(day.next)}. Last train at ${formatClock(day.last)}.`
+  }
+  const look = tone === 'closed' ? 'bg-line/60 text-ink-soft' : tone === 'warn' ? 'bg-late/10 text-late' : 'bg-tint text-ink'
+  return (
+    <section className={`border-b border-line px-4 py-2.5 ${look}`} aria-live="polite">
+      <p className="text-[15px] font-extrabold">
+        {tone === 'closed' ? '● ' : tone === 'warn' ? '⚠ ' : ''}
+        {title}
+      </p>
+      <p className="mt-0.5 text-sm text-ink">{detail}</p>
+    </section>
+  )
+}
+
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+/** A train's running days in words: "Daily", "Except Thu" or "Mon, Wed, Fri". */
+function runningDays(days) {
+  if ((days & 0b1111111) === 0b1111111) return 'Daily'
+  const on = WEEKDAYS.filter((_, d) => (days >> d) & 1)
+  const off = WEEKDAYS.filter((_, d) => !((days >> d) & 1))
+  return off.length <= 2 ? `Except ${off.join(', ')}` : on.join(', ')
+}
+
+/**
+ * Picks which day's run of a train to show, as a train can be out for days: the one that left
+ * today, yesterday or the day before. Only days it actually runs are offered.
+ */
+function RunPicker({ departure, run, weekday, from, onPick }) {
+  const dayIndex = (k) => (((weekday - 1 - k) % 7) + 7) % 7
+  const choices = [0, 1, 2].filter((k) => (departure.days >> dayIndex(k)) & 1)
+  const label = (k) => ['Today', 'Yesterday', '2 days ago'][k]
+  return (
+    <section className="border-b border-line bg-card px-4 py-3">
+      <p className="text-xs text-ink-soft">
+        Runs: <span className="font-semibold text-ink">{runningDays(departure.days)}</span> · leaves {from} at {formatClock(departure.startSec)}
+      </p>
+      {choices.length > 0 && (
+        <div className="mt-2 flex items-center gap-1.5" role="radiogroup" aria-label="Which day it left">
+          <span className="text-xs text-ink-soft">Left</span>
+          {choices.map((k) => (
+            <button
+              key={k}
+              role="radio"
+              aria-checked={run === k}
+              onClick={() => onPick(k)}
+              className={`rounded-full border px-3 py-1 text-xs font-semibold ${run === k ? 'border-road-dark bg-road-dark text-white' : 'border-line bg-card text-ink-soft'}`}
+            >
+              {label(k)} <span className="font-normal opacity-80">{WEEKDAYS[dayIndex(k)]}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -383,7 +487,7 @@ function LocationStatus({ mode, error, tooVague, accuracy, position, words }) {
   return message && <p className="border-b border-line bg-tint px-4 py-2.5 text-sm">{message}</p>
 }
 
-function StatusCard({ service, journey, bus, method, accuracy, nowSec, words }) {
+function StatusCard({ service, journey, bus, method, accuracy, nowSec, words, live }) {
   const { phase, source, last, delaySec, eta, startsInSec } = journey
   const stops = service.stops
   const next = stops[last + 1]
@@ -419,7 +523,7 @@ function StatusCard({ service, journey, bus, method, accuracy, nowSec, words }) 
         </div>
         {delaySec != null && phase === 'running' && <DelayChip sec={delaySec} />}
       </div>
-      <SourceBadge source={source} bus={bus} method={method} accuracy={accuracy} words={words} />
+      <SourceBadge source={source} bus={bus} method={method} accuracy={accuracy} words={words} live={live} />
       {journey.offSchedule && (
         <p className="mt-1 text-xs text-ink-soft">Times use the {words.bus}'s live position and this route's usual travel times.</p>
       )}
@@ -446,8 +550,16 @@ function formatAccuracy(metres) {
  * Says where a live position comes from. Nothing shows for a timetable estimate, and riders' positions
  * never say how many people are sharing.
  */
-function SourceBadge({ source, bus, method, accuracy, words }) {
+function SourceBadge({ source, bus, method, accuracy, words, live }) {
   if (source === 'timetable') return null
+  if (source === 'lastSeen') {
+    return (
+      <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-ink-soft">
+        <span className="size-2 shrink-0 rounded-full bg-ink-soft/50" />
+        Last seen by a rider {formatAge(live?.lastAgeSec ?? 0)} · moved on from there at its delay, estimated
+      </p>
+    )
+  }
   const text = {
     gps: "Live from your phone's GPS",
     cell:
@@ -538,13 +650,13 @@ function useLiveBuses(feedId, serviceId, refreshCount, service) {
 }
 
 /** Asks the server for rider positions on this trip, as long as the page is showing it. */
-function useLivePolling(feedId, tripId, mode, refreshCount) {
+function useLivePolling(feedId, tripId, mode, refreshCount, runDate) {
   const [live, setLive] = useState(null)
   useEffect(() => {
     if (!tripId) return undefined
     const poll = async () => {
       try {
-        setLive(await api.live(feedId, tripId))
+        setLive(await api.live(feedId, tripId, undefined, runDate))
       } catch {
         // Tracking from the phone doesn't need this, and the timetable still shows otherwise.
         setLive(null)
@@ -553,18 +665,18 @@ function useLivePolling(feedId, tripId, mode, refreshCount) {
     poll()
     const id = setInterval(poll, LIVE_POLL_MS)
     return () => clearInterval(id)
-  }, [feedId, tripId, mode, refreshCount])
+  }, [feedId, tripId, mode, refreshCount, runDate])
   return live
 }
 
-function useSharing({ feedId, tripId, mode, enabled, fixRef }) {
+function useSharing({ feedId, tripId, mode, enabled, fixRef, runDate }) {
   useEffect(() => {
     if (!enabled || mode === 'off' || !tripId || !RIDER_ID) return undefined
     const send = () => {
       const fix = fixRef.current
       if (fix) {
         // A failed report only means others see this bus a little less often.
-        api.report(feedId, tripId, { riderId: RIDER_ID, lat: fix.lat, lon: fix.lon, accuracy: fix.accuracy, source: mode }).catch(() => {})
+        api.report(feedId, tripId, { riderId: RIDER_ID, lat: fix.lat, lon: fix.lon, accuracy: fix.accuracy, source: mode }, runDate).catch(() => {})
         // A GPS position beside the connected tower is how the tower map grows.
         if (mode === 'gps' && canReadTowers()) {
           readCells().then((cells) => api.learnCells(cells, fix)).catch(() => {})
@@ -574,5 +686,5 @@ function useSharing({ feedId, tripId, mode, enabled, fixRef }) {
     send()
     const id = setInterval(send, SHARE_EVERY_MS)
     return () => clearInterval(id)
-  }, [enabled, mode, tripId, feedId, fixRef])
+  }, [enabled, mode, tripId, feedId, fixRef, runDate])
 }

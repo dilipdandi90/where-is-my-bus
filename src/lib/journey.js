@@ -12,14 +12,16 @@ const SCHEDULE_SLACK_SEC = 45 * 60
  *
  * @param phoneKm the phone's km along the route if it's on the route, otherwise null
  * @param bus the live bus believed to be running this trip, or null
- * @param live the latest rider status from the server, or null
+ * @param live the latest rider status from the server, or null. Its lastKm and lastAgeSec (where riders
+ *        last saw it) carry a delay forward once nobody is sharing: source 'lastSeen'.
  * @param timetabled false for a line with no published timetable. Then only a live position places the
  *        train, there are no times, and without one the phase is 'unknown'.
  */
-export function describeJourney({ stops, trip, nowSec, phoneKm, bus, live, mode, timetabled = true }) {
+export function describeJourney({ stops, trip, nowSec, phoneKm, bus, live, mode, timetabled = true, startedDaysAgo = null }) {
   const { offsets, startSec } = trip
   const duration = offsets[offsets.length - 1]
-  const clock = clockForTrip(nowSec, startSec, duration)
+  // A train's run is chosen by the day it left (today, yesterday…), as it can be out for days.
+  const clock = startedDaysAgo != null ? nowSec + startedDaysAgo * DAY_SEC : clockForTrip(nowSec, startSec, duration)
   const elapsed = clock - startSec
 
   let source = 'timetable'
@@ -33,6 +35,15 @@ export function describeJourney({ stops, trip, nowSec, phoneKm, bus, live, mode,
   } else if (live?.riders > 0 && live.km != null) {
     source = 'riders'
     km = live.km
+  } else if (timetabled && live?.lastKm != null && live.lastAgeSec != null) {
+    // Nobody is sharing now, but someone saw it a while ago. Its delay then is carried forward, so a
+    // late train keeps showing late instead of jumping back to where the timetable says.
+    const seenElapsed = elapsed - live.lastAgeSec
+    const delay = seenElapsed - offsetAtKm(stops, offsets, live.lastKm)
+    const lateElapsed = Math.min(duration, Math.max(0, elapsed - delay))
+    source = 'lastSeen'
+    // Never placed behind where it was actually seen.
+    km = Math.max(live.lastKm, kmAtOffset(stops, offsets, lateElapsed))
   }
 
   if (!timetabled) {
@@ -74,6 +85,30 @@ export function describeJourney({ stops, trip, nowSec, phoneKm, bus, live, mode,
   })
 
   return { phase, source, km, last, delaySec, eta, clock }
+}
+
+const DAY_SEC = 86400
+
+/** Which day of a train's journey it reaches a stop: 0 for the day it left, 1 for the next… */
+export const journeyDay = (trip, stopIndex) => Math.floor((trip.startSec + trip.offsets[stopIndex]) / DAY_SEC)
+
+/**
+ * For a train that runs on certain days and can take days to arrive: how many days ago its current
+ * run left (0 today, 1 yesterday…). A run on its way now wins; otherwise today's, if it runs today;
+ * otherwise the most recent run, shown as finished.
+ *
+ * @param days the days it leaves its first stop, one bit per weekday from Monday (bit 0)
+ * @param isoWeekday today, 1 for Monday to 7 for Sunday
+ */
+export function currentRun({ startSec, durationSec, days }, nowSec, isoWeekday, maxDaysBack = 3) {
+  const leftOn = (k) => (days >> ((((isoWeekday - 1 - k) % 7) + 7) % 7)) & 1
+  for (let k = 0; k <= maxDaysBack; k++) {
+    const clock = nowSec + k * DAY_SEC
+    if (leftOn(k) && clock >= startSec && clock <= startSec + durationSec) return k
+  }
+  if (leftOn(0)) return 0
+  for (let k = 1; k <= 7; k++) if (leftOn(k)) return k
+  return 0
 }
 
 const ROUTE_END_KM = 0.3

@@ -138,6 +138,29 @@ class GtfsLoaderTest {
     }
 
     @Test
+    void trainsKeepWhenTheyArriveAsWellAsWhenTheyLeave() throws IOException {
+        Path zip = zip(Map.of(
+                "stops.txt", STOPS,
+                "routes.txt", "route_id,route_short_name\nr,12157\n",
+                "trips.txt", "route_id,service_id,trip_id\nr,x,t\n",
+                "stop_times.txt", """
+                        trip_id,arrival_time,departure_time,stop_id,stop_sequence
+                        t,17:50:00,17:50:00,A,0
+                        t,18:55:00,18:57:00,B,1
+                        t,21:30:00,21:30:00,C,2
+                        """));
+
+        var trip = GtfsLoader.load(zip, NumberRule.ROUTE_NAME).tripById().get("t");
+        assertArrayEquals(new int[] {0, 4020, 13200}, trip.offsets());
+        assertArrayEquals(new int[] {0, 3900, 13200}, trip.arrivals());
+    }
+
+    @Test
+    void busesWithoutWaitsStoreNoSeparateArrivals() {
+        assertEquals(null, GtfsLoader.arrivals(new int[] {100, 200, 300}, 100, new int[] {0, 100, 200}));
+    }
+
+    @Test
     void metroLinesKeepTheirColourPlatformsAndLinesWithoutATimetable() throws IOException {
         Path zip = zip(Map.of(
                 "stops.txt", """

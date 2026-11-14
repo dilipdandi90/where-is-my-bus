@@ -44,7 +44,7 @@ function labelFor(stops, km, last) {
  * @param lineColor a metro line's colour (hex digits). The whole line is then drawn in it, as on a metro
  *        map, with the part already travelled stronger. Buses get a grey route with orange travelled.
  */
-export default function RouteMap({ stops, journey, lineColor }) {
+export default function RouteMap({ stops, journey, lineColor, train = Boolean(lineColor) }) {
   const box = useRef(null)
   const parts = useRef(null)
   const { km, last, phase, source } = journey
@@ -105,11 +105,11 @@ export default function RouteMap({ stops, journey, lineColor }) {
       p.bus.remove()
       return
     }
-    p.bus.setIcon(busIcon(source === 'timetable', Boolean(lineColor)))
+    p.bus.setIcon(busIcon(source === 'timetable', train))
     p.bus.setLatLng(here)
     p.bus.setTooltipContent(labelFor(stops, km, last))
     if (!p.map.hasLayer(p.bus)) p.bus.addTo(p.map)
-  }, [stops, km, last, phase, source, showBus, lineColor])
+  }, [stops, km, last, phase, source, showBus, train])
 
   const centreOnBus = () => {
     const p = parts.current

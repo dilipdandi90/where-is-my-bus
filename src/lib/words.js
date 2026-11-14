@@ -27,9 +27,22 @@ const METRO = {
   stopPlaceholder: 'Station name',
 }
 
-export const isMetro = (feed) => feed?.mode === 'metro'
+const RAIL = {
+  ...METRO,
+  searchTab: 'Train number or name',
+  searchPlaceholder: 'Train number or name, such as 12157',
+}
 
-export const wordsFor = (feed) => (isMetro(feed) ? METRO : BUS)
+export const isMetro = (feed) => feed?.mode === 'metro'
+export const isRail = (feed) => feed?.mode === 'rail'
+
+/** 'bus', 'metro' or 'rail'. */
+export const modeOf = (feed) => (isMetro(feed) ? 'metro' : isRail(feed) ? 'rail' : 'bus')
+
+/** Fastest a vehicle of this kind plausibly travels, so faster jumps count as GPS errors. */
+export const maxSpeedKmh = (feed) => (isRail(feed) ? 160 : 100)
+
+export const wordsFor = (feed) => (isRail(feed) ? RAIL : isMetro(feed) ? METRO : BUS)
 
 /** "1 bus", "3 trains". */
 export const count = (words, n) => `${n} ${n === 1 ? words.bus : words.buses}`

@@ -17,6 +17,7 @@ import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -70,17 +71,27 @@ public class BusController {
     /** @param platform the platform number, where the feed gives one, otherwise empty */
     public record StopDto(String id, String name, double lat, double lon, double km, String platform) {}
 
-    public record Departure(String tripId, int startSec, int durationSec) {}
+    /**
+     * @param pattern which of the service's {@code patterns} holds this departure's times between stops
+     * @param days the days it leaves its first stop, one bit per weekday from Monday (bit 0)
+     * @param arrivalPattern which of {@code arrivalPatterns} holds its arrival times, or -1 when they're
+     *        the same as its departures
+     */
+    public record Departure(String tripId, int startSec, int durationSec, int pattern, int days, int arrivalPattern) {}
 
     /**
      * @param untimedTripId for a line with no timetable, the trip to track and share live, otherwise null
+     * @param patterns each distinct list of seconds from the first stop to every stop. Departures share
+     *        a few of these (every Purple Line train takes the same time between stations), so sending
+     *        them once lets the app build any departure's times itself instead of asking for each one.
      */
     public record ServiceDetail(String serviceId, String number, String operator, String label, String from,
                                 String to, double km, String timezone, List<StopDto> stops,
                                 List<Departure> departures, String color, String textColor, boolean timetabled,
-                                String untimedTripId) {}
+                                String untimedTripId, List<int[]> patterns, List<int[]> arrivalPatterns) {}
 
-    public record TripDetail(String tripId, String serviceId, int startSec, int[] offsets) {}
+    /** @param arrivals seconds from the first stop to arriving at each, or null when the same as offsets */
+    public record TripDetail(String tripId, String serviceId, int startSec, int[] offsets, int[] arrivals) {}
 
     public record StopSuggestion(String name, double lat, double lon) {}
 
@@ -93,7 +104,11 @@ public class BusController {
                                 double km, String boardStop, String alightStop, boolean tomorrow, boolean departed,
                                 boolean untimed, String boardPlatform) {}
 
-    public record LiveStatus(int riders, Double km, String source, Integer ageSec) {}
+    /**
+     * @param lastKm where riders last saw it, even after they stopped sharing, or null
+     * @param lastAgeSec how long ago that was
+     */
+    public record LiveStatus(int riders, Double km, String source, Integer ageSec, Double lastKm, Integer lastAgeSec) {}
 
     public record LiveBus(String plate, double km, long ageSec, double lat, double lon) {}
 
@@ -152,11 +167,27 @@ public class BusController {
             stops.add(new StopDto(st.id(), st.name(), st.lat(), st.lon(), s.km[i], st.platform()));
         }
         int weekday = ZonedDateTime.now(data.zone()).getDayOfWeek().getValue();
-        List<Departure> departures = s.trips.stream().filter(t -> t.runsOn(weekday))
-                .map(t -> new Departure(t.id(), t.startSec(), t.durationSec())).toList();
+        // The loader stores each distinct offsets array once and shares it between trips, so the same
+        // array means the same pattern. Identity keeps this a cheap lookup per departure.
+        Map<int[], Integer> patternIndex = new IdentityHashMap<>();
+        List<int[]> patterns = new ArrayList<>();
+        Map<int[], Integer> arrivalIndex = new IdentityHashMap<>();
+        List<int[]> arrivalPatterns = new ArrayList<>();
+        // A train can be on its way for two or three days, and riders pick which day's run they're on,
+        // so trains list every departure with its days; buses and metro list today's.
+        boolean rail = "rail".equals(registry.get(feed).feed().mode());
+        List<Departure> departures = s.trips.stream().filter(t -> rail || t.runsOn(weekday))
+                .map(t -> new Departure(t.id(), t.startSec(), t.durationSec(), patternIndex.computeIfAbsent(t.offsets(), o -> {
+                    patterns.add(o);
+                    return patterns.size() - 1;
+                }), t.weekdayMask(), t.arrivals() == null ? -1 : arrivalIndex.computeIfAbsent(t.arrivals(), o -> {
+                    arrivalPatterns.add(o);
+                    return arrivalPatterns.size() - 1;
+                })))
+                .toList();
         return new ServiceDetail(s.id, s.number, s.operator, s.label, s.from(), s.to(), s.totalKm(),
                 data.zone().getId(), stops, departures, s.color, s.textColor, s.timetabled,
-                s.timetabled ? null : s.trips.getFirst().id());
+                s.timetabled ? null : s.trips.getFirst().id(), patterns, arrivalPatterns);
     }
 
     // Trip IDs go in the query string: some contain backslashes (MSRTC's L5674\5), and the web
@@ -165,7 +196,7 @@ public class BusController {
     public TripDetail trip(@PathVariable String feed, @RequestParam("id") String tripId, HttpServletResponse response) {
         Trip t = trip(ready(feed), tripId);
         cacheFor(response, 6 * 3600);
-        return new TripDetail(t.id(), t.serviceId(), t.startSec(), t.offsets());
+        return new TripDetail(t.id(), t.serviceId(), t.startSec(), t.offsets(), t.arrivals());
     }
 
     @GetMapping("/{feed}/stops")
@@ -239,19 +270,25 @@ public class BusController {
     }
 
     @GetMapping("/{feed}/trip/live")
-    public LiveStatus live(@PathVariable String feed, @RequestParam("id") String tripId) {
+    public LiveStatus live(@PathVariable String feed, @RequestParam("id") String tripId,
+                           @RequestParam(value = "run", required = false) String run) {
         trip(ready(feed), tripId);
-        RiderReports.Consensus c = reports.consensus(feed + "/" + tripId);
+        String key = tripKey(feed, tripId, run);
+        RiderReports.Consensus c = reports.consensus(key);
+        RiderReports.LastSeen seen = reports.lastSeen(key);
+        Double lastKm = seen == null ? null : seen.km();
+        Integer lastAge = seen == null ? null : (int) (Instant.now().getEpochSecond() - seen.at().getEpochSecond());
         if (c == null) {
-            return new LiveStatus(0, null, null, null);
+            return new LiveStatus(0, null, null, null, lastKm, lastAge);
         }
         return new LiveStatus(c.riders(), c.km(), c.gps() ? "gps" : "cell",
-                (int) (Instant.now().getEpochSecond() - c.updatedAt().getEpochSecond()));
+                (int) (Instant.now().getEpochSecond() - c.updatedAt().getEpochSecond()), lastKm, lastAge);
     }
 
     @PostMapping("/{feed}/trip/reports")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    public void report(@PathVariable String feed, @RequestParam("id") String tripId, @RequestBody ReportRequest r) {
+    public void report(@PathVariable String feed, @RequestParam("id") String tripId,
+                       @RequestParam(value = "run", required = false) String run, @RequestBody ReportRequest r) {
         FeedData data = ready(feed);
         Trip trip = trip(data, tripId);
         boolean gps = "gps".equals(r.source());
@@ -265,9 +302,19 @@ public class BusController {
         if (snap.offRouteKm() > Math.max(MIN_ROUTE_TOLERANCE_KM, r.accuracy() / 1000)) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT, "Position isn't on this route");
         }
-        if (!reports.add(feed + "/" + tripId, r.riderId(), snap.km(), gps)) {
+        if (!reports.add(tripKey(feed, tripId, run), r.riderId(), snap.km(), gps)) {
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Reporting too often");
         }
+    }
+
+    private static final Pattern RUN_DATE = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
+
+    /**
+     * The key rider reports are kept under. A train's runs from different days can be on the line at
+     * once (a 30-hour train), so each run is kept apart by the date it left; buses don't send one.
+     */
+    private static String tripKey(String feed, String tripId, String run) {
+        return run != null && RUN_DATE.matcher(run).matches() ? feed + "/" + tripId + "@" + run : feed + "/" + tripId;
     }
 
     /** Buses on the route that haven't yet reached its last stop, so a passenger could still catch them. */

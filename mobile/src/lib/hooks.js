@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useState } from 'react'
-import { readCache, writeCache } from './storage.js'
+import { readCache, readMemory, writeCache } from './storage.js'
 
 /**
  * Loads data for a key, returning {data, error, loading, refreshing, retry}. A null key loads nothing.
@@ -39,7 +39,9 @@ export function useData(key, fetcher, { cacheMs } = {}) {
   }, [request])
 
   const retry = () => setAttempt((a) => a + 1)
-  const saved = cached.key === key ? cached.data : undefined
+  // Memory first, read during render, so a saved copy draws on the very first frame with no loading
+  // screen; the disk read above only matters for something not in memory yet.
+  const saved = (key != null && cacheMs ? readMemory(key, cacheMs) : undefined) ?? (cached.key === key ? cached.data : undefined)
   if (request == null) return { loading: false, retry }
   if (state.request === request) return state.data === undefined && saved !== undefined ? { ...state, data: saved, retry } : { ...state, retry }
   if (state.key === key && state.data !== undefined) return { data: state.data, refreshing: true, retry }

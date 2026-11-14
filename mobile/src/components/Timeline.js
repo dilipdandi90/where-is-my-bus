@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native'
-import { AT_STOP_KM, formatClock, formatDistance, formatKm, nextStopInfo } from '../lib/shared.js'
+import { AT_STOP_KM, formatClock, formatDistance, formatKm, journeyDay, nextStopInfo } from '../lib/shared.js'
 import { colors } from '../lib/theme.js'
 import { BellIcon, BusIcon, PlatformChip, Press, TrainIcon } from './ui.js'
 
@@ -27,7 +27,8 @@ function busOffset({ stops, centers, km, last, phase }) {
  *
  * @param onBusY called with the vehicle's position in the list, so the screen can scroll to it
  */
-export default function Timeline({ stops, trip, journey, passedAt = {}, alarmIndex, onToggleAlarm, scheme, train, onBusY }) {
+/** @param showDays label stops reached a day or two into the journey ("Day 2"), for long trains */
+export default function Timeline({ stops, trip, journey, passedAt = {}, alarmIndex, onToggleAlarm, scheme, train, onBusY, showDays = false }) {
   const { last, phase, source, km } = journey
   const [rows, setRows] = useState({})
   const centers = stops.map((_, i) => rows[i])
@@ -58,7 +59,8 @@ export default function Timeline({ stops, trip, journey, passedAt = {}, alarmInd
   }, [measured, phase, busY, onBusY])
 
   const nextStop = phase === 'running' ? nextStopInfo(stops, km, last) : null
-  const estimated = source === 'timetable'
+  // Grey for any estimate: the timetable, or a delay carried forward from where it was last seen.
+  const estimated = source === 'timetable' || source === 'lastSeen'
 
   return (
     <View style={{ paddingBottom: 16 }}>
@@ -70,7 +72,8 @@ export default function Timeline({ stops, trip, journey, passedAt = {}, alarmInd
           />
         </>
       )}
-      {measured && phase === 'running' && (
+      {/* A train also keeps its icon at the destination once it has arrived. */}
+      {measured && (phase === 'running' || (showDays && phase === 'finished')) && (
         <Animated.View style={[styles.marker, { transform: [{ translateY: Animated.subtract(animatedY, 15) }] }]} pointerEvents="none">
           <View style={[styles.pin, { backgroundColor: estimated ? colors.inkSoft : colors.ink, borderColor: scheme.road }]}>
             {train ? <TrainIcon size={16} color={colors.paper} /> : <BusIcon size={16} color={colors.paper} />}
@@ -87,6 +90,9 @@ export default function Timeline({ stops, trip, journey, passedAt = {}, alarmInd
                   <Text style={{ color: colors.inkSoft }}>At </Text>
                 )}
                 <Text style={{ fontWeight: '700' }}>{nextStop.name}</Text>
+                {/* Trains often run late, so a timetable position is labelled as one. */}
+                {showDays && source === 'timetable' ? <Text style={{ color: colors.inkSoft }}> · as per timetable</Text> : null}
+                {source === 'lastSeen' ? <Text style={{ color: colors.inkSoft }}> · estimated</Text> : null}
               </Text>
             </View>
           )}
@@ -97,6 +103,8 @@ export default function Timeline({ stops, trip, journey, passedAt = {}, alarmInd
         const passed = i <= last
         const atStop = phase === 'running' && i === last && km - stop.km < AT_STOP_KM
         const times = stopTimes({ i, passed, trip, journey, passedAt })
+        const day = showDays ? journeyDay(trip, i) : 0
+        const newDay = showDays && day > 0 && (i === 0 || journeyDay(trip, i - 1) !== day)
         return (
           <View
             key={`${stop.id}-${i}`}
@@ -108,6 +116,7 @@ export default function Timeline({ stops, trip, journey, passedAt = {}, alarmInd
             }}
           >
             <View style={styles.timeCol}>
+              {newDay && <Text style={{ fontSize: 11, fontWeight: '800', color: scheme.roadDark }}>Day {day + 1}</Text>}
               {times.scheduled != null && <Text style={styles.scheduled}>{formatClock(times.scheduled)}</Text>}
               {times.actual != null ? (
                 <Text style={[styles.actual, { color: tone(times.delay) }]}>{formatClock(times.actual)}</Text>
@@ -128,6 +137,10 @@ export default function Timeline({ stops, trip, journey, passedAt = {}, alarmInd
                 </View>
                 <Text style={styles.km}>
                   {formatKm(stop.km)}
+                  {showDays && ` · ${arrivesLeaves(trip, i, stops.length)}`}
+                  {showDays && stopStatus({ passed, atStop, isLast: i === stops.length - 1, phase }) && (
+                    <Text style={{ color: colors.ink, fontWeight: '600' }}> · {stopStatus({ passed, atStop, isLast: i === stops.length - 1, phase })}</Text>
+                  )}
                   {times.delay != null && <Text style={{ color: tone(times.delay), fontWeight: '600' }}> · {delayText(times.delay)}</Text>}
                 </Text>
               </View>
@@ -157,6 +170,25 @@ function stopTimes({ i, passed, trip, journey, passedAt }) {
   const recorded = passed ? passedAt[i] : null
   const actual = recorded ?? journey.eta[i]
   return { scheduled, actual, delay: scheduled != null && actual != null ? actual - scheduled : null }
+}
+
+/**
+ * When a train arrives and leaves a station, as in the railway timetable: "Dep 17:50" at the start,
+ * "Arr 21:30" at the end, "Arr 18:55 · Dep 18:57" where it waits.
+ */
+function arrivesLeaves(trip, i, count) {
+  const leaves = trip.startSec + trip.offsets[i]
+  const arrives = trip.startSec + (trip.arrivals?.[i] ?? trip.offsets[i])
+  if (i === 0) return `Dep ${formatClock(leaves)}`
+  if (i === count - 1) return `Arr ${formatClock(arrives)}`
+  return arrives === leaves ? `Dep ${formatClock(leaves)}` : `Arr ${formatClock(arrives)} · Dep ${formatClock(leaves)}`
+}
+
+/** Where the train is in relation to a station: departed, at the station, or arrived at the end. */
+function stopStatus({ passed, atStop, isLast, phase }) {
+  if (atStop) return 'At station'
+  if (isLast) return phase === 'finished' ? 'Arrived' : null
+  return passed ? 'Departed' : null
 }
 
 const tone = (delay) => (delay == null ? colors.ink : delay >= LATE_FROM_SEC ? colors.late : colors.ontime)

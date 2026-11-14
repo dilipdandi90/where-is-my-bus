@@ -62,7 +62,7 @@ const BUS = 'M5 4a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v14a2 2 0 0 1-1 1.73V21a1 1 0 0 1
 const TRAIN = 'M12 2c-4 0-8 .5-8 4v9.5C4 17.43 5.57 19 7.5 19L6 20.5v.5h2.23l2-2H14l2 2h2v-.5L16.5 19c1.93 0 3.5-1.57 3.5-3.5V6c0-3.5-3.58-4-8-4zM7.5 17c-.83 0-1.5-.67-1.5-1.5S6.67 14 7.5 14s1.5.67 1.5 1.5S8.33 17 7.5 17zm3.5-7H6V6h5v4zm2 0V6h5v4h-5zm3.5 7c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z'
 
 /** The route on a map with the part travelled in colour and the vehicle on it. */
-export default function RouteMap({ stops, journey, scheme, metro }) {
+export default function RouteMap({ stops, journey, scheme, metro, train = metro }) {
   const web = useRef(null)
   const [ready, setReady] = useState(false)
   const { km, last, phase, source } = journey
@@ -82,7 +82,7 @@ export default function RouteMap({ stops, journey, scheme, metro }) {
   }, [ready, stops, km, last, phase, source, running])
 
   const start = () => {
-    const data = { stops: stops.map((s) => ({ lat: s.lat, lon: s.lon, name: s.name })), road: scheme.road, metro, icon: svg(metro ? TRAIN : BUS) }
+    const data = { stops: stops.map((s) => ({ lat: s.lat, lon: s.lon, name: s.name })), road: scheme.road, metro, icon: svg(train ? TRAIN : BUS) }
     web.current?.injectJavaScript(`init(${JSON.stringify(data)}); true;`)
     setReady(true)
   }
@@ -106,7 +106,7 @@ export default function RouteMap({ stops, journey, scheme, metro }) {
       />
       {running && (
         <Press onPress={() => web.current?.injectJavaScript('centre(); true;')} style={styles.show} accessibilityRole="button">
-          <Text style={{ color: colors.paper, fontWeight: '600' }}>Show {metro ? 'train' : 'bus'}</Text>
+          <Text style={{ color: colors.paper, fontWeight: '600' }}>Show {train ? 'train' : 'bus'}</Text>
         </Press>
       )}
     </View>

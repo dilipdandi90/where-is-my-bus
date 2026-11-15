@@ -285,6 +285,7 @@ export default function BusScreen({ feedId, feed, serviceId, initialTripId = nul
                 lineColor={metro ? service.color : null}
                 train={metro || rail}
                 showDays={rail}
+                passing={service.passing}
                 stops={service.stops}
                 trip={trip}
                 journey={journey}

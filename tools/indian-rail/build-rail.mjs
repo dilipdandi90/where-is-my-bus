@@ -201,18 +201,74 @@ function alignNames(rows, names) {
       for (const candidate of [names[j], j + 1 < names.length ? `${names[j]} ${names[j + 1]}` : null]) {
         if (!candidate) continue
         const r = ratio(row.s.name, candidate)
-        if (!best || r < best.r) best = { r, j, candidate }
+        if (!best || r < best.r) best = { r, j, end: candidate === names[j] ? j : j + 1, candidate }
       }
     }
     if (best && best.r <= 0.5) {
       row.exact = best.candidate
-      from = best.j + 1
+      row.at = [best.j, best.end]
+      from = best.end + 1
     }
   }
+  // A row too damaged to match ("ype") between two matched rows with exactly one name between them
+  // is that name: the rows and the names are in the same order.
+  rows.forEach((row, i) => {
+    const prev = rows[i - 1]?.at
+    const next = rows[i + 1]?.at
+    if (!row.at && prev && next && next[0] - prev[1] === 2) {
+      row.exact = names[prev[1] + 1]
+      row.at = [prev[1] + 1, prev[1] + 1]
+    }
+  })
 }
 
 // Footer and header rows that slipped in as stations.
 const NOT_A_STATION = /arrival|destination|departure|originat|\bTable\b|Tabie|accommod/i
+
+// Stations renamed with a new code since DataMeet's 2016 list (old → current).
+const RENAMED = { CSTM: 'CSMT', BCT: 'MMCT', GLB: 'KLBG', ALD: 'PRYJ', MGS: 'DDU', HBJ: 'RKMP', JHS: 'VGLJ', FD: 'AYC' }
+
+const kmBetween = (a, b) => {
+  const r = Math.PI / 180
+  const h = Math.sin(((b.lat - a.lat) * r) / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(((b.lon - a.lon) * r) / 2) ** 2
+  return 12742 * Math.asin(Math.sqrt(h))
+}
+const allPlaces = [...byCode.values()]
+
+/**
+ * A name too damaged to match on its own ("ype" for Pune) is matched using the rows around it. The
+ * printed km gives how far it is from the matched stations before and after, and the track is never
+ * shorter than the straight line, so only stations at a distance that fits, with a name still
+ * fairly close, are considered, and only when exactly one fits clearly best.
+ */
+function placeByKm(rows) {
+  rows.forEach((row, i) => {
+    if (row.hit || row.km == null) return
+    const near = (step) => {
+      for (let j = i + step; j >= 0 && j < rows.length && Math.abs(j - i) <= 4; j += step) {
+        if (rows[j].hit && rows[j].km != null) return { row: rows[j], place: byCode.get(rows[j].hit.code) }
+      }
+      return null
+    }
+    const prev = near(-1)
+    const next = near(1)
+    if (!prev?.place || !next?.place || !(prev.row.km < row.km && row.km < next.row.km)) return
+    const name = norm(row.exact ?? row.s.name)
+    if (name.length < 3) return
+    const before = row.km - prev.row.km
+    const after = next.row.km - row.km
+    const fits = allPlaces
+      .filter((p) => {
+        const a = kmBetween(prev.place, p)
+        const b = kmBetween(p, next.place)
+        return a <= before * 1.05 + 2 && a >= before * 0.55 - 2 && b <= after * 1.05 + 2 && b >= after * 0.55 - 2
+      })
+      .map((p) => ({ p, r: editDistance(name, norm(cleanStation(p.name))) / Math.max(3, norm(cleanStation(p.name)).length) }))
+      .filter((c) => c.r <= 0.6)
+      .sort((a, b) => a.r - b.r)
+    if (fits.length && (fits.length === 1 || fits[1].r - fits[0].r >= 0.15)) row.hit = { code: fits[0].p.code, name: fits[0].p.name }
+  })
+}
 
 const unmatchedNames = new Map()
 const pieces = new Map() // train number → [{page, name, days, stops}]
@@ -228,6 +284,10 @@ for (const f of files) {
   for (const row of rows) {
     const name = row.exact ?? row.s.name
     row.hit = stations.best(name)
+  }
+  placeByKm(rows)
+  for (const row of rows) {
+    const name = row.exact ?? row.s.name
     if (!row.hit && name) unmatchedNames.set(name, (unmatchedNames.get(name) ?? 0) + 1)
   }
   numbers.forEach((number, c) => {
@@ -238,9 +298,11 @@ for (const f of files) {
       if (!lines.length || !hit) continue
       const arr = toSec(lines[0])
       const dep = toSec(lines[lines.length - 1])
-      const place = byCode.get(hit.code)
+      // An old code for a renamed station would make it a second, separate stop.
+      const code = byCode.has(RENAMED[hit.code]) ? RENAMED[hit.code] : hit.code
+      const place = byCode.get(code)
       if (!place) continue
-      stops.push({ code: hit.code, name: cleanStation(place.name), lat: place.lat, lon: place.lon, arr, dep })
+      stops.push({ code, name: cleanStation(place.name), lat: place.lat, lon: place.lon, arr, dep })
     }
     if (stops.length < 1) return
     if (!pieces.has(number)) pieces.set(number, [])

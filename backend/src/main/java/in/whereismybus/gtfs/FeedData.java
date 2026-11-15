@@ -28,6 +28,14 @@ public record FeedData(
     /** All stops sharing a name, such as the two sides of a road. */
     public record StopName(String name, double lat, double lon) {}
 
+    /**
+     * A station a train goes through without stopping, between its stops {@code after} and
+     * {@code after + 1}, as Where Is My Train lists them.
+     *
+     * @param km how far along the service it is, on the same scale as {@link Service#km}
+     */
+    public record Passing(int after, String code, String name, double lat, double lon, double km) {}
+
     /** A bus number running one exact sequence of stops. This is what users pick and follow. */
     public static final class Service {
         public final String id;
@@ -49,11 +57,19 @@ public record FeedData(
          * holds the stop order and is the trip riders track and share live.
          */
         public final boolean timetabled;
+        /** Stations passed without stopping, in order. Empty for feeds that don't list them. */
+        public final List<Passing> passing;
         final String numberKey;
         final String nameKey;
 
         public Service(String id, String number, String operator, String label, List<Stop> stops, double[] km,
                        List<Trip> trips, Set<String> routeIds, String color, String textColor) {
+            this(id, number, operator, label, stops, km, trips, routeIds, color, textColor, List.of());
+        }
+
+        public Service(String id, String number, String operator, String label, List<Stop> stops, double[] km,
+                       List<Trip> trips, Set<String> routeIds, String color, String textColor, List<Passing> passing) {
+            this.passing = passing;
             this.id = id;
             this.number = number;
             this.operator = operator;

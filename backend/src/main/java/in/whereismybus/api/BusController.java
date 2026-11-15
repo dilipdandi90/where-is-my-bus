@@ -88,7 +88,8 @@ public class BusController {
     public record ServiceDetail(String serviceId, String number, String operator, String label, String from,
                                 String to, double km, String timezone, List<StopDto> stops,
                                 List<Departure> departures, String color, String textColor, boolean timetabled,
-                                String untimedTripId, List<int[]> patterns, List<int[]> arrivalPatterns) {}
+                                String untimedTripId, List<int[]> patterns, List<int[]> arrivalPatterns,
+                                List<FeedData.Passing> passing) {}
 
     /** @param arrivals seconds from the first stop to arriving at each, or null when the same as offsets */
     public record TripDetail(String tripId, String serviceId, int startSec, int[] offsets, int[] arrivals) {}
@@ -187,7 +188,7 @@ public class BusController {
                 .toList();
         return new ServiceDetail(s.id, s.number, s.operator, s.label, s.from(), s.to(), s.totalKm(),
                 data.zone().getId(), stops, departures, s.color, s.textColor, s.timetabled,
-                s.timetabled ? null : s.trips.getFirst().id(), patterns, arrivalPatterns);
+                s.timetabled ? null : s.trips.getFirst().id(), patterns, arrivalPatterns, s.passing);
     }
 
     // Trip IDs go in the query string: some contain backslashes (MSRTC's L5674\5), and the web

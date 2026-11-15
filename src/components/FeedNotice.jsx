@@ -28,7 +28,7 @@ export default function FeedNotice({ feed }) {
   if (feed.timesRepaired) {
     warnings.push('The published file had a calculation error in its times. We corrected them, so treat them as approximate.')
   }
-  if (feed.note) warnings.push(feed.note)
+  // if (feed.note) warnings.push(feed.note)
 
   return (
     <div className="text-xs leading-relaxed text-ink-soft">

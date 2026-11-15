@@ -156,6 +156,33 @@ class GtfsLoaderTest {
     }
 
     @Test
+    void stationsPassedWithoutStoppingArePlacedBetweenTheirStops() throws IOException {
+        Path zip = zip(Map.of(
+                "stops.txt", STOPS,
+                "routes.txt", "route_id,route_short_name\nr,12115\n",
+                "trips.txt", "route_id,service_id,trip_id\nr,x,t\n",
+                "stop_times.txt", """
+                        trip_id,arrival_time,departure_time,stop_id,stop_sequence
+                        t,10:00:00,10:00:00,A,0
+                        t,11:00:00,11:00:00,C,1
+                        """,
+                "passing.txt", """
+                        from_stop_id,to_stop_id,stop_code,stop_name,stop_lat,stop_lon,fraction
+                        A,C,LONI,Loni,17.025,78.00,0.25
+                        A,C,URI,Uruli,17.075,78.00,0.75
+                        C,A,XX,Other way,17.05,78.00,0.5
+                        """));
+
+        var service = GtfsLoader.load(zip, NumberRule.ROUTE_NAME).services().getFirst();
+        assertEquals(2, service.passing.size());
+        var loni = service.passing.getFirst();
+        assertEquals(0, loni.after());
+        assertEquals("Loni", loni.name());
+        assertEquals(service.km[1] * 0.25, loni.km(), 1e-9);
+        assertEquals("URI", service.passing.get(1).code());
+    }
+
+    @Test
     void busesWithoutWaitsStoreNoSeparateArrivals() {
         assertEquals(null, GtfsLoader.arrivals(new int[] {100, 200, 300}, 100, new int[] {0, 100, 200}));
     }

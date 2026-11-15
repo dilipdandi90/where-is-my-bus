@@ -1,5 +1,6 @@
 package in.whereismybus.gtfs;
 
+import in.whereismybus.gtfs.FeedData.Passing;
 import in.whereismybus.gtfs.FeedData.Service;
 import in.whereismybus.gtfs.FeedData.Stop;
 import in.whereismybus.gtfs.FeedData.StopName;
@@ -54,6 +55,9 @@ public final class GtfsLoader {
     private record Route(String agency, String shortName, String longName, String color, String textColor) {}
 
     private record TripInfo(String routeId, String serviceId, String name) {}
+
+    /** A row of passing.txt: a station passed between two stops, a fraction of the way along the track. */
+    record Between(String code, String name, double lat, double lon, double fraction) {}
 
     private record Draft(String id, TripInfo info, int[] stopIdx, int start, int[] offsets, double km, int[] arrivals) {}
 
@@ -153,13 +157,21 @@ public final class GtfsLoader {
                 }
             });
 
-            return assemble(rule, timezone[0], validTo[0], stops, routes, weekdays, tripInfo, timed);
+            // Not part of GTFS: stations a train passes without stopping, between two of its stops.
+            Map<String, List<Between>> passing = new HashMap<>();
+            readOptional(zip, "passing.txt", r -> passing.computeIfAbsent(get(r, "from_stop_id") + "|" + get(r, "to_stop_id"),
+                    k -> new ArrayList<>()).add(new Between(get(r, "stop_code"), get(r, "stop_name"),
+                    Double.parseDouble(get(r, "stop_lat")), Double.parseDouble(get(r, "stop_lon")),
+                    Double.parseDouble(get(r, "fraction")))));
+
+            return assemble(rule, timezone[0], validTo[0], stops, routes, weekdays, tripInfo, timed, passing);
         }
     }
 
     private static FeedData assemble(NumberRule rule, String timezone, LocalDate validTo, List<Stop> stops,
                                      Map<String, Route> routes, Map<String, Integer> weekdays,
-                                     Map<String, TripInfo> tripInfo, Map<String, TimedStops> timed) {
+                                     Map<String, TripInfo> tripInfo, Map<String, TimedStops> timed,
+                                     Map<String, List<Between>> passing) {
         List<Draft> drafts = new ArrayList<>(timed.size());
         Map<Key, double[]> kmCache = new HashMap<>();
         for (var e : timed.entrySet()) {
@@ -217,8 +229,10 @@ public final class GtfsLoader {
         groups.forEach((id, g) -> {
             g.trips().sort((a, b) -> Integer.compare(a.startSec(), b.startSec()));
             List<Stop> serviceStops = Arrays.stream(g.stopIdx()).mapToObj(stops::get).toList();
+            double[] km = kmCache.get(new Key(g.stopIdx()));
             Service service = new Service(id, g.number(), g.operator(), g.label(), serviceStops,
-                    kmCache.get(new Key(g.stopIdx())), List.copyOf(g.trips()), Set.copyOf(g.routeIds()), g.color(), g.textColor());
+                    km, List.copyOf(g.trips()), Set.copyOf(g.routeIds()), g.color(), g.textColor(),
+                    passingFor(serviceStops, km, passing));
             services.add(service);
             serviceById.put(id, service);
             serviceStops.forEach(s -> stopNames.computeIfAbsent(s.key(),
@@ -260,6 +274,24 @@ public final class GtfsLoader {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** The stations passed between each pair of stops, placed on the service's km scale. */
+    static List<Passing> passingFor(List<Stop> stops, double[] km, Map<String, List<Between>> passing) {
+        if (passing.isEmpty()) {
+            return List.of();
+        }
+        List<Passing> out = new ArrayList<>();
+        for (int i = 0; i + 1 < stops.size(); i++) {
+            List<Between> between = passing.get(stops.get(i).id() + "|" + stops.get(i + 1).id());
+            if (between == null) {
+                continue;
+            }
+            for (Between b : between) {
+                out.add(new Passing(i, b.code(), b.name(), b.lat(), b.lon(), km[i] + b.fraction() * (km[i + 1] - km[i])));
+            }
+        }
+        return List.copyOf(out);
     }
 
     private static double[] cumulativeKm(int[] stopIdx, List<Stop> stops) {

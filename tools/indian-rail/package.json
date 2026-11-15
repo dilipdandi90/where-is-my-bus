@@ -6,7 +6,8 @@
   "scripts": {
     "fetch": "node fetch.mjs",
     "read": "node batch.mjs",
-    "build": "node build-rail.mjs && node make-gtfs.mjs"
+    "build": "node build-rail.mjs && node passing.mjs && node make-gtfs.mjs",
+    "track": "node fetch-track.mjs"
   },
   "dependencies": {
     "jpeg-js": "0.4.4",

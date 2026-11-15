@@ -268,6 +268,7 @@ export default function BusScreen({ feedId, serviceId, initialTripId }) {
             ) : (
               <View onLayout={(e) => (timelineTop.current = e.nativeEvent.layout.y)}>
                 <Timeline
+                  passing={service.passing}
                   stops={service.stops}
                   trip={trip}
                   journey={journey}
